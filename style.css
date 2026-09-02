@@ -208,3 +208,13 @@ body {
 #scrim {
   position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.35);
 }
+
+/* saved-season chip under the region pill */
+#season-chip {
+  position: fixed; top: 74px; left: 50%; transform: translateX(-50%);
+  z-index: 20; background: rgba(24,28,24,.88); color: #9fe3b9;
+  font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 999px;
+  backdrop-filter: blur(6px);
+}
+.review-bar { margin-top: 10px; border-top: 1px solid rgba(255,255,255,.15); padding-top: 8px; }
+.review-bar .rv-note { font-size: 12px; opacity: .8; margin: 0 0 8px; }

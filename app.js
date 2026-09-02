@@ -251,11 +251,13 @@ function addSourcesAndLayers() {
   map.addLayer({
     id: 'exclusion-fill', type: 'fill', source: 'exclusion',
     paint: {
-      'fill-color': '#6fb3e8',
-      // narrow (< 25 m wide) fades; too_small ghosts are nearly invisible
-      // fill (still tappable); everything else solid
+      // narrow (< 25 m wide) fades; too_small ghosts show amber ("needs
+      // your decision"); everything else solid blue
+      'fill-color': ['case',
+        ['==', ['get', 'enforce'], 'too_small'], '#ffd28a',
+        '#6fb3e8'],
       'fill-opacity': ['case',
-        ['==', ['get', 'enforce'], 'too_small'], 0.06,
+        ['==', ['get', 'enforce'], 'too_small'], 0.18,
         ['==', ['get', 'enforce'], 'narrow'], 0.14,
         0.3]
     }
@@ -273,7 +275,7 @@ function addSourcesAndLayers() {
   map.addLayer({
     id: 'exclusion-line-toosmall', type: 'line', source: 'exclusion',
     filter: ['==', ['get', 'enforce'], 'too_small'],
-    paint: { 'line-color': '#9fd0f0', 'line-width': 1.5, 'line-dasharray': [0.5, 1.8] }
+    paint: { 'line-color': '#ffcf7d', 'line-width': 2, 'line-dasharray': [0.6, 1.6] }
   });
 
   // Water gaps. OPEN = a real hole cut out of the exclusion polygons (see
@@ -451,9 +453,20 @@ function toast(msg) {
 }
 
 function showHintCard() {
+  let reviewBtn = '';
+  try {
+    const n = buildReviewList(currentRegion).length;
+    if (n) {
+      reviewBtn = '<div class="gap-toggle"><button id="review-btn" class="sel-open">' +
+        `Check ${n} suggested spot${n > 1 ? 's' : ''}</button></div>`;
+    }
+  } catch (e) {}
   $('#card-body').innerHTML =
     '<p class="card-kicker">Now</p>' +
-    '<p class="card-main">Cows stay out of the shaded blue areas. Tap a water drop to open or close a water gap.</p>';
+    '<p class="card-main">Cows stay out of the shaded blue areas. Tap a water drop to open or close a water gap.</p>' +
+    reviewBtn;
+  const rb = $('#review-btn');
+  if (rb) rb.onclick = startReview;
 }
 
 function esc(s) {
@@ -512,6 +525,122 @@ function showExclusionCard(props) {
   if (ubtn) ubtn.onclick = () => unwidenFeature(props.id);
 }
 
+/* ---------------- Saved-season chip + guided review tour ---------------- */
+
+function updateSeasonChip() {
+  const chip = $('#season-chip');
+  if (!chip) return;
+  const d = regionData[currentRegion];
+  if (d && d.editSavedAt) {
+    chip.textContent = 'Your 2026 area · saved ' + new Date(d.editSavedAt).toLocaleDateString();
+    chip.hidden = false;
+    chip.onclick = showSeasonCard;
+  } else {
+    chip.hidden = true;
+  }
+}
+
+function showSeasonCard() {
+  const d = regionData[currentRegion];
+  const feats = d.exclusion.features;
+  const enforced = feats.filter(f => f.properties.enforce !== 'too_small');
+  const totalAc = Math.round(enforced.reduce((a, f) => a + (f.properties.acres || 0), 0));
+  const widened = feats.filter(f => f.properties.enforce === 'widened').length;
+  $('#card-body').innerHTML =
+    '<button class="card-close" aria-label="Close">&times;</button>' +
+    '<p class="card-kicker">Your 2026 riparian area</p>' +
+    `<p class="card-main">${totalAc.toLocaleString()} acres excluded</p>` +
+    `<p class="card-sub">Saved ${new Date(d.editSavedAt).toLocaleDateString()} on this device.` +
+    (widened ? ` ${widened} small spot${widened > 1 ? 's' : ''} widened to protect.` : '') +
+    ' This map IS your saved version — what you see is what is saved.</p>' +
+    '<div class="gap-toggle">' +
+    '<button id="sc-edit" class="sel-open">Adjust boundary</button>' +
+    '<button id="sc-reset">Back to suggested</button>' +
+    '</div>';
+  $('.card-close').onclick = showHintCard;
+  $('#sc-edit').onclick = enterBoundaryEdit;
+  $('#sc-reset').onclick = () => {
+    const dd = regionData[currentRegion];
+    dd.exclusion.features = JSON.parse(JSON.stringify(dd.exclusionPristine.features));
+    dd.editSavedAt = null;
+    try { localStorage.removeItem('riparianEdit:' + currentRegion); } catch (e) {}
+    refreshGapSources();
+    updateSeasonChip();
+    showHintCard();
+    toast('Back to the suggested boundary.');
+  };
+}
+
+// The review tour: fly the rancher to the spots most worth a look —
+// small wet spots (widen or leave out?), the widest narrow pieces, and the
+// biggest zones. "Looks good" is remembered per device.
+function reviewedIds(region) {
+  try { return new Set(JSON.parse(localStorage.getItem('reviewed:' + region)) || []); }
+  catch (e) { return new Set(); }
+}
+
+function buildReviewList(region) {
+  const d = regionData[region];
+  if (!d) return [];
+  const done = reviewedIds(region);
+  const feats = d.exclusion.features.filter(f => !done.has(f.properties.id));
+  const byAcres = (a, b) => (b.properties.acres || 0) - (a.properties.acres || 0);
+  const pick = (flag, n, reason) =>
+    feats.filter(f => f.properties.enforce === flag).sort(byAcres).slice(0, n)
+      .map(f => ({ f, reason }));
+  return [
+    ...pick('too_small', 6, 'Small wet spot — widen it to protect it, or leave it out.'),
+    ...pick('narrow', 3, 'Narrow piece — collars may not hold it. Widen or shrink it away.'),
+    ...pick('ok', 3, 'One of your biggest zones — check the edges match your land.')
+  ].slice(0, 12);
+}
+
+let reviewList = [], reviewIdx = 0;
+
+function startReview() {
+  reviewList = buildReviewList(currentRegion);
+  reviewIdx = 0;
+  if (!reviewList.length) { toast('Nothing left to check. Nice.'); showHintCard(); return; }
+  goReviewItem();
+}
+
+function goReviewItem() {
+  if (reviewIdx >= reviewList.length) {
+    toast('All checked. Nice work.');
+    showHintCard();
+    return;
+  }
+  const item = reviewList[reviewIdx];
+  const f = item.f;
+  try {
+    const bb = turf.bbox(f);
+    map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 17, duration: 900 });
+  } catch (e) {}
+  showExclusionCard(f.properties);
+  const body = $('#card-body');
+  const bar = document.createElement('div');
+  bar.className = 'review-bar';
+  bar.innerHTML =
+    `<p class="rv-note">Checking spot ${reviewIdx + 1} of ${reviewList.length}: ${item.reason}</p>` +
+    '<div class="gap-toggle">' +
+    '<button id="rv-ok" class="sel-open">Looks good</button>' +
+    '<button id="rv-skip">Skip</button>' +
+    '<button id="rv-stop">Stop</button>' +
+    '</div>';
+  body.appendChild(bar);
+  $('#rv-ok').onclick = () => {
+    try {
+      const done = reviewedIds(currentRegion);
+      done.add(f.properties.id);
+      localStorage.setItem('reviewed:' + currentRegion, JSON.stringify([...done]));
+    } catch (e) {}
+    reviewIdx += 1;
+    goReviewItem();
+  };
+  $('#rv-skip').onclick = () => { reviewIdx += 1; goReviewItem(); };
+  $('#rv-stop').onclick = showHintCard;
+}
+
 function persistSeasonEdit(region) {
   try {
     localStorage.setItem('riparianEdit:' + region, JSON.stringify({
@@ -520,6 +649,7 @@ function persistSeasonEdit(region) {
     }));
     regionData[region].editSavedAt = Date.now();
   } catch (e) { /* storage unavailable — change is session-only */ }
+  updateSeasonChip();
 }
 
 // Widen a too-small/narrow piece by 15 m on every side, guaranteeing the
@@ -921,31 +1051,50 @@ function wireBoundaryEditing() {
       d.editSavedAt = Date.now();
     } catch (e) {}
     refreshGapSources();
+    updateSeasonChip();
     exitBoundaryEdit();
     toast('Saved as your 2026 riparian area. Now check your water gaps.');
   };
 
-  // one finger paints, second finger cancels the stroke (palm rejection)
+  // One finger paints. TWO fingers move the map (so wide riparian areas can
+  // be edited screen by screen without leaving edit mode). On desktop, hold
+  // Shift and drag to move the map.
+  let panMid = null;
+  const midOf = (pts) => ({ x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 });
+  const clearStroke = () => {
+    strokeActive = false; strokePts = [];
+    map.getSource('brush-stroke').setData({ type: 'FeatureCollection', features: [] });
+  };
   const begin = (e) => {
     if (!editMode) return;
-    if (e.points && e.points.length > 1) { strokeActive = false; strokePts = []; return; }
+    if (e.originalEvent && e.originalEvent.shiftKey) { clearStroke(); return; } // desktop pan
+    if (e.points && e.points.length > 1) { clearStroke(); panMid = midOf(e.points); return; }
     e.preventDefault && e.preventDefault();
     strokeActive = true;
     strokePts = [e.lngLat];
   };
   const moveStroke = (e) => {
-    if (!editMode || !strokeActive) return;
-    if (e.points && e.points.length > 1) {
-      strokeActive = false; strokePts = [];
-      map.getSource('brush-stroke').setData({ type: 'FeatureCollection', features: [] });
+    if (!editMode) return;
+    if (e.originalEvent && e.originalEvent.shiftKey && e.originalEvent.buttons) {
+      clearStroke();
+      map.panBy([-e.originalEvent.movementX, -e.originalEvent.movementY], { duration: 0 });
       return;
     }
+    if (e.points && e.points.length > 1) {
+      clearStroke();
+      const mid = midOf(e.points);
+      if (panMid) map.panBy([panMid.x - mid.x, panMid.y - mid.y], { duration: 0 });
+      panMid = mid;
+      return;
+    }
+    if (!strokeActive) return;
     strokePts.push(e.lngLat);
     if (strokePts.length > 1) {
       map.getSource('brush-stroke').setData(turf.lineString(strokePts.map(p => [p.lng, p.lat])));
     }
   };
-  const endStroke = () => {
+  const endStroke = (e) => {
+    panMid = null;
     if (!editMode || !strokeActive) return;
     strokeActive = false;
     applyStroke();
@@ -1089,6 +1238,7 @@ async function switchRegion(region) {
   await loadRegion(region);
   refreshRegionSources();
   showHintCard();
+  updateSeasonChip();
   flyToRegion(region);
 }
 
@@ -1162,6 +1312,10 @@ async function boot() {
     // Start with the attribution collapsed to its small "i" button.
     const attrib = document.querySelector('.maplibregl-ctrl-attrib');
     if (attrib) attrib.classList.remove('maplibregl-compact-show');
+    // data is loaded now — the hint card can show the review count,
+    // and the season chip can reflect saved edits
+    showHintCard();
+    updateSeasonChip();
   };
   map.once('load', setup);
   const readyPoll = setInterval(() => {
