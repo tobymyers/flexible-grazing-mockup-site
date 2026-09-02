@@ -252,19 +252,28 @@ function addSourcesAndLayers() {
     id: 'exclusion-fill', type: 'fill', source: 'exclusion',
     paint: {
       'fill-color': '#6fb3e8',
-      // narrow parts (< 25 m wide — below reliable collar enforcement) fade
-      'fill-opacity': ['case', ['==', ['get', 'enforce'], 'narrow'], 0.14, 0.3]
+      // narrow (< 25 m wide) fades; too_small ghosts are nearly invisible
+      // fill (still tappable); everything else solid
+      'fill-opacity': ['case',
+        ['==', ['get', 'enforce'], 'too_small'], 0.06,
+        ['==', ['get', 'enforce'], 'narrow'], 0.14,
+        0.3]
     }
   });
   map.addLayer({
     id: 'exclusion-line', type: 'line', source: 'exclusion',
-    filter: ['!=', ['get', 'enforce'], 'narrow'],
+    filter: ['all', ['!=', ['get', 'enforce'], 'narrow'], ['!=', ['get', 'enforce'], 'too_small']],
     paint: { 'line-color': '#4f9fd9', 'line-width': 2 }
   });
   map.addLayer({
     id: 'exclusion-line-narrow', type: 'line', source: 'exclusion',
     filter: ['==', ['get', 'enforce'], 'narrow'],
     paint: { 'line-color': '#7fb8d8', 'line-width': 1.5, 'line-dasharray': [1.5, 1.5] }
+  });
+  map.addLayer({
+    id: 'exclusion-line-toosmall', type: 'line', source: 'exclusion',
+    filter: ['==', ['get', 'enforce'], 'too_small'],
+    paint: { 'line-color': '#9fd0f0', 'line-width': 1.5, 'line-dasharray': [0.5, 1.8] }
   });
 
   // Water gaps. OPEN = a real hole cut out of the exclusion polygons (see
@@ -456,12 +465,25 @@ function showExclusionCard(props) {
   const attrs = [];
   if (props.strm_type) attrs.push('dominant Strm_Type: ' + esc(props.strm_type));
   if (props.veg_pct != null) attrs.push('mesic persistence (Veg_Pct): ' + Math.round(props.veg_pct) + '%');
-  const narrowNote = props.enforce === 'narrow'
-    ? '<p class="card-sub" style="color:#ffd28a"><b>Narrow zone</b>: this piece is under 25 m wide everywhere. ' +
+  let narrowNote = '';
+  if (props.enforce === 'narrow') {
+    narrowNote =
+      '<p class="card-sub" style="color:#ffd28a"><b>Narrow zone</b>: this piece is under 25 m wide everywhere. ' +
       'Collar GPS error plus the warning band need about 25&ndash;30 m to hold a boundary reliably ' +
-      '(Nofence 25 m rule; AZ Extension 100 ft; USDA burn study used a 30 m cue buffer). ' +
-      'Consider widening it with the brush, or removing it.</p>'
-    : '';
+      '(Nofence 25 m rule; AZ Extension 100 ft; USDA burn study used a 30 m cue buffer).</p>' +
+      '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to a size collars can hold</button></div>';
+  } else if (props.enforce === 'too_small') {
+    narrowNote =
+      '<p class="card-sub" style="color:#ffd28a"><b>Too small for collars</b>: this spot is under 10 m wide &mdash; ' +
+      'no collar system has ever held a boundary that tight, so it is not part of the keep-out area. ' +
+      'If it matters (a seep, a spring), widen it: the whole widened circle becomes the keep-out.</p>' +
+      '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to protect this spot</button></div>';
+  } else if (props.enforce === 'widened') {
+    narrowNote =
+      '<p class="card-sub" style="color:#9fe3b9"><b>Widened by you</b>: grown by 15 m on every side so the ' +
+      'boundary is at least 30 m across &mdash; wide enough for collars to hold.</p>' +
+      '<div class="gap-toggle"><button id="ex-unwiden-btn">Undo widening</button></div>';
+  }
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     '<p class="card-kicker">Exclusion zone</p>' +
@@ -484,6 +506,54 @@ function showExclusionCard(props) {
     '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
   $('.card-close').onclick = showHintCard;
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
+  const wbtn = $('#ex-widen-btn');
+  if (wbtn) wbtn.onclick = () => widenFeature(props.id);
+  const ubtn = $('#ex-unwiden-btn');
+  if (ubtn) ubtn.onclick = () => unwidenFeature(props.id);
+}
+
+function persistSeasonEdit(region) {
+  try {
+    localStorage.setItem('riparianEdit:' + region, JSON.stringify({
+      season: '2026', savedAt: Date.now(),
+      features: regionData[region].exclusion.features
+    }));
+    regionData[region].editSavedAt = Date.now();
+  } catch (e) { /* storage unavailable — change is session-only */ }
+}
+
+// Widen a too-small/narrow piece by 15 m on every side, guaranteeing the
+// result is at least 30 m across everywhere — collar-enforceable. The
+// original shape is kept on the feature so widening can be undone.
+function widenFeature(fid) {
+  const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
+  if (!f) return;
+  let grown;
+  try { grown = turf.buffer(f, 15, { units: 'meters', steps: 8 }); }
+  catch (e) { toast('Could not widen this piece.'); return; }
+  f.properties._origGeom = f.geometry;
+  f.properties._origEnforce = f.properties.enforce;
+  f.geometry = grown.geometry;
+  f.properties.enforce = 'widened';
+  f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showExclusionCard(f.properties);
+  toast('Widened. Collars can hold this now.');
+}
+
+function unwidenFeature(fid) {
+  const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
+  if (!f || !f.properties._origGeom) return;
+  f.geometry = f.properties._origGeom;
+  f.properties.enforce = f.properties._origEnforce || 'too_small';
+  delete f.properties._origGeom;
+  delete f.properties._origEnforce;
+  f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showExclusionCard(f.properties);
+  toast('Back to the original size.');
 }
 
 function showGapCard(props) {
@@ -917,7 +987,7 @@ function openSheet(el) {
 }
 
 const LAYER_GROUPS = {
-  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-source-label'],
+  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-source-label'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons'],
   paddock: ['paddock-glow', 'paddock-line', 'paddock-source-label'],
   allotments: ['allotments-line', 'allotments-label'],
