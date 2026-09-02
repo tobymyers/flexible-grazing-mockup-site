@@ -70,7 +70,7 @@
 <div id="layer-sheet" class="sheet" hidden>
   <div class="sheet-grab"></div>
   <h2>What shows on the map</h2>
-  <label class="switch-row"><span>Red areas <small>cows stay out</small></span><input type="checkbox" data-layer="exclusion" checked></label>
+  <label class="switch-row"><span>Exclusion zones</span><input type="checkbox" data-layer="exclusion" checked></label>
   <label class="switch-row"><span>Water gaps <small>drink spots</small></span><input type="checkbox" data-layer="water_gaps" checked></label>
   <label class="switch-row"><span>Paddock line</span><input type="checkbox" data-layer="paddock" checked></label>
   <label class="switch-row"><span>Allotments <small>BLM grazing areas</small></span><input type="checkbox" data-layer="allotments" checked></label>
@@ -102,6 +102,7 @@
 <div id="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/7.2.0/turf.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
 </body>

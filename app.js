@@ -54,6 +54,17 @@ async function loadRegion(region) {
   const out = {};
   const results = await Promise.all(LAYER_FILES.map(l => fetchLayer(region, l)));
   LAYER_FILES.forEach((l, i) => { out[l] = results[i]; });
+  // Toby places every water gap himself — ignore any shipped/default gaps,
+  // and restore the gaps he placed earlier on this device.
+  out.water_gaps.features = out.water_gaps.features.filter(
+    f => String(f.properties && f.properties.id).startsWith('user-'));
+  try {
+    const saved = JSON.parse(localStorage.getItem('userGaps:' + region));
+    if (saved && Array.isArray(saved.feats)) {
+      out.water_gaps.features = saved.feats;
+      gapOpenState[region] = saved.state || {};
+    }
+  } catch (e) { /* no saved gaps, or storage unavailable — start clean */ }
   regionData[region] = out;
   // seed gap open/closed state from the data (default: open)
   gapOpenState[region] = gapOpenState[region] || {};
@@ -236,19 +247,18 @@ function addSourcesAndLayers() {
     paint: { 'line-color': '#4f9fd9', 'line-width': 2 }
   });
 
-  // Water gap seals. Open = bright dashed notch. Closed = patch matching the
-  // exclusion fill so the gap reads as sealed shut (precomputed geometry only).
+  // Water gaps. OPEN = a real hole cut out of the exclusion polygons (see
+  // displayedExclusionFC) — the ground shows through; only a dashed white
+  // gate outline marks where it is. CLOSED = no cut; a subtle solid outline.
   map.addLayer({
     id: 'gap-fill', type: 'fill', source: 'gap-seals',
-    paint: {
-      'fill-color': ['case', ['get', 'open'], '#2979ff', '#6fb3e8'],
-      'fill-opacity': ['case', ['get', 'open'], 0.35, 0.45]
-    }
+    filter: ['==', ['get', 'open'], false],
+    paint: { 'fill-color': '#6fb3e8', 'fill-opacity': 0.12 }
   });
   map.addLayer({
     id: 'gap-line-open', type: 'line', source: 'gap-seals',
     filter: ['==', ['get', 'open'], true],
-    paint: { 'line-color': '#4da3ff', 'line-width': 2, 'line-dasharray': [2, 1.5] }
+    paint: { 'line-color': '#ffffff', 'line-width': 2.5, 'line-dasharray': [2, 1.5] }
   });
   map.addLayer({
     id: 'gap-line-closed', type: 'line', source: 'gap-seals',
@@ -344,12 +354,39 @@ function addSourcesAndLayers() {
   });
 }
 
+// Exclusion as displayed: the pristine pipeline polygons minus every OPEN
+// water gap (a real geometry cut via turf.difference, so the ground shows
+// through the gap — no layers stacked on top). Closed gaps cut nothing.
+function displayedExclusionFC(region) {
+  const orig = regionData[region].exclusion;
+  const state = gapOpenState[region];
+  const cutters = [];
+  const gaps = buildGapCollections(region);
+  for (const s of gaps.seals.features) {
+    if (state[s.properties.id] !== false) cutters.push(s); // open gaps cut
+  }
+  if (!cutters.length || typeof turf === 'undefined') return orig;
+  const feats = orig.features.map(f => {
+    let g = f;
+    for (const c of cutters) {
+      try {
+        if (turf.booleanIntersects(g, c)) {
+          const diff = turf.difference(turf.featureCollection([g, c]));
+          if (diff) { diff.properties = f.properties; g = diff; }
+        }
+      } catch (e) { /* keep the un-cut feature rather than crash */ }
+    }
+    return g;
+  }).filter(Boolean);
+  return { type: 'FeatureCollection', features: feats };
+}
+
 function refreshRegionSources() {
   const d = regionData[currentRegion];
   const gaps = buildGapCollections(currentRegion);
   map.getSource('ownership').setData(d.ownership);
   map.getSource('allotments').setData(d.allotments);
-  map.getSource('exclusion').setData(d.exclusion);
+  map.getSource('exclusion').setData(displayedExclusionFC(currentRegion));
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
   map.getSource('paddock').setData(d.paddock);
@@ -360,6 +397,7 @@ function refreshGapSources() {
   const gaps = buildGapCollections(currentRegion);
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
+  map.getSource('exclusion').setData(displayedExclusionFC(currentRegion));
 }
 
 /* ---------------- UI helpers ---------------- */
@@ -387,12 +425,25 @@ function esc(s) {
 
 function showExclusionCard(props) {
   const acres = (props.acres != null) ? Math.round(props.acres).toLocaleString() : null;
+  const attrs = [];
+  if (props.strm_type) attrs.push('dominant Strm_Type: ' + esc(props.strm_type));
+  if (props.veg_pct != null) attrs.push('mesic persistence (Veg_Pct): ' + Math.round(props.veg_pct) + '%');
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
-    '<p class="card-kicker">Keep-out area</p>' +
+    '<p class="card-kicker">Exclusion zone</p>' +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${acres ? ' &middot; ' + acres + ' acres' : ''}</p>` +
-    '<p class="card-sub">This creek bottom stays green late into the year. Cows would camp here and wear it down. The blue area keeps them out, so the grass and banks stay healthy.</p>' +
-    (props.source ? `<p class="card-sub" style="opacity:.7">Data: ${esc(props.source)}</p>` : '');
+    '<p class="card-sub" style="font-size:12px;line-height:1.5">' +
+    '<b>Selection rule</b> (per mesic valley-bottom segment): ' +
+    '(Strm_Type &isin; {Perennial, Intermittent} AND Veg_Pct &gt; 50) OR ' +
+    '(Veg_Pct + Tree_Pct &gt; 60 AND Tree_Pct &gt; 15); Slope_Deg &lt; 15&deg;; area &ge; 0.25 ac; ' +
+    'segments deduped on geometry WKB.<br>' +
+    '<b>Inputs</b>: Mesic Analysis Platform valley-bottom segments (30 m Landsat, 1984&ndash;2025 late-season NDVI persistence) ' +
+    '&cup; NWI riparian + wetland supplement &cup; USGS 3DHP hydrography.<br>' +
+    '<b>Post-processing</b> (EPSG:6341): dissolve &rarr; morphological closing &plusmn;20 m &rarr; simplify 5 m ' +
+    '&rarr; drop holes &lt; 1 ac &rarr; subtract road corridors (TIGER/UGRC centerlines, 5 m half-width) at crossings.' +
+    (attrs.length ? '<br><b>This polygon</b>: ' + attrs.join('; ') + '.' : '') +
+    '</p>' +
+    (props.source ? `<p class="card-sub" style="opacity:.7">Source tag: ${esc(props.source)}</p>` : '');
   $('.card-close').onclick = showHintCard;
 }
 
@@ -419,9 +470,19 @@ function showGapCard(props) {
   if (del) del.onclick = () => removeUserGap(props);
 }
 
+function saveUserGaps(region) {
+  try {
+    localStorage.setItem('userGaps:' + region, JSON.stringify({
+      feats: regionData[region].water_gaps.features,
+      state: gapOpenState[region]
+    }));
+  } catch (e) { /* private mode or storage full — gaps just won't persist */ }
+}
+
 function setGap(props, open) {
   gapOpenState[currentRegion][props.id] = open;
   refreshGapSources();
+  saveUserGaps(currentRegion);
   showGapCard(props);
   toast(open ? 'Gap open. Cows can drink here.' : 'Gap closed. The line is sealed.');
 }
@@ -528,6 +589,7 @@ function finishGapPlacement() {
   }
   exitGapPlacement();
   refreshGapSources();
+  saveUserGaps(currentRegion);
   if (f) { showGapCard(f.properties); toast('Water gap saved.'); }
 }
 
@@ -547,12 +609,54 @@ function exitGapPlacement() {
   map.touchZoomRotate.enableRotation();
 }
 
+/* Drag-to-move: press a droplet and drag — the gap slides along, snapping to
+   the exclusion boundary (standard marker-drag; no modifier keys). */
+let draggingGapId = null;
+
+function wireGapDragging() {
+  const start = (e) => {
+    const f = e.features && e.features[0];
+    if (!f || !String(f.properties.id).startsWith('user-')) return;
+    e.preventDefault();
+    draggingGapId = f.properties.id;
+    map.dragPan.disable();
+    map.getCanvas().style.cursor = 'grabbing';
+  };
+  const move = (e) => {
+    if (!draggingGapId) return;
+    const snapped = snapToBoundary(e.point, 120) || e.lngLat;
+    const feat = regionData[currentRegion].water_gaps.features.find(
+      x => x.properties.id === draggingGapId);
+    if (feat) {
+      feat.geometry.coordinates = [snapped.lng, snapped.lat];
+      refreshGapSources();
+    }
+  };
+  const end = () => {
+    if (!draggingGapId) return;
+    draggingGapId = null;
+    map.dragPan.enable();
+    map.getCanvas().style.cursor = '';
+    saveUserGaps(currentRegion);
+    toast('Water gap moved.');
+  };
+  map.on('mousedown', 'gap-icons', start);
+  map.on('touchstart', 'gap-icons', start);
+  map.on('mousemove', move);
+  map.on('touchmove', move);
+  map.on('mouseup', end);
+  map.on('touchend', end);
+  map.on('mouseenter', 'gap-icons', () => { map.getCanvas().style.cursor = 'grab'; });
+  map.on('mouseleave', 'gap-icons', () => { if (!draggingGapId) map.getCanvas().style.cursor = ''; });
+}
+
 function removeUserGap(props) {
   const feats = regionData[currentRegion].water_gaps.features;
   const i = feats.findIndex(x => x.properties.id === props.id);
   if (i >= 0) feats.splice(i, 1);
   delete gapOpenState[currentRegion][props.id];
   refreshGapSources();
+  saveUserGaps(currentRegion);
   showHintCard();
   toast('Water gap removed.');
 }
@@ -735,6 +839,7 @@ async function boot() {
     await dataReady;
     addSourcesAndLayers();
     wireMapClicks();
+    wireGapDragging();
     // Land the first view on the data itself (real data may sit elsewhere
     // in the region than the hard-coded fallback center).
     const b = regionBounds(currentRegion);
