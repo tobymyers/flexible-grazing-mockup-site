@@ -612,26 +612,28 @@ function goReviewItem() {
   }
   const item = reviewList[reviewIdx];
   const f = item.f;
+  const p = f.properties;
   try {
     const bb = turf.bbox(f);
     map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 17, duration: 900 });
   } catch (e) {}
-  showExclusionCard(f.properties);
-  const body = $('#card-body');
-  const bar = document.createElement('div');
-  bar.className = 'review-bar';
-  bar.innerHTML =
-    `<p class="rv-note">Checking spot ${reviewIdx + 1} of ${reviewList.length}: ${item.reason}</p>` +
-    '<div class="gap-toggle">' +
+  // Compact card on purpose: the point is to LOOK at the map, not read.
+  // Tap the zone itself for the full technical card.
+  const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>' : '';
+  $('#card-body').innerHTML =
+    `<p class="card-kicker">Check ${reviewIdx + 1} of ${reviewList.length}</p>` +
+    `<p class="card-sub" style="margin-top:2px">${item.reason}</p>` +
+    '<div class="gap-toggle">' + canWiden +
     '<button id="rv-ok" class="sel-open">Looks good</button>' +
     '<button id="rv-skip">Skip</button>' +
-    '<button id="rv-stop">Stop</button>' +
+    '<button id="rv-stop" aria-label="Stop checking">&times;</button>' +
     '</div>';
-  body.appendChild(bar);
+  const wbtn = $('#rv-widen');
+  if (wbtn) wbtn.onclick = () => { widenFeature(p.id); goReviewItem(); };
   $('#rv-ok').onclick = () => {
     try {
       const done = reviewedIds(currentRegion);
-      done.add(f.properties.id);
+      done.add(p.id);
       localStorage.setItem('reviewed:' + currentRegion, JSON.stringify([...done]));
     } catch (e) {}
     reviewIdx += 1;
