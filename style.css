@@ -23,7 +23,13 @@ body {
 }
 
 #map { position: fixed; inset: 0; }
-.maplibregl-ctrl-bottom-left { display: none; }
+/* keep the corner for the scale bar, lifted above the bottom card */
+.maplibregl-ctrl-bottom-left { bottom: 205px; left: 10px; }
+.maplibregl-ctrl-scale {
+  background: rgba(20, 24, 20, 0.65); color: #f2f3ee;
+  border: 1.5px solid rgba(242, 243, 238, 0.7); border-top: none;
+  font-size: 11px; border-radius: 0 0 6px 6px;
+}
 .maplibregl-ctrl-bottom-right { bottom: calc(182px + var(--safe-b)); right: 6px; } /* compact attribution, above the cards */
 .maplibregl-ctrl button.maplibregl-ctrl-geolocate { display: none; } /* our own round button triggers it */
 
@@ -127,6 +133,26 @@ body {
   display: block; width: 100%; margin-top: 10px; padding: 12px 0;
   background: none; border: none; color: #ff8a80; font-size: 15px;
 }
+
+/* Boundary edit bar: big gloved-thumb targets, high contrast */
+#edit-bar {
+  position: fixed; left: 10px; right: 10px; bottom: 14px; z-index: 30;
+  background: rgba(24, 28, 24, 0.94); border-radius: 22px; padding: 12px;
+  backdrop-filter: blur(8px);
+}
+#edit-bar .eb-row { display: flex; gap: 8px; margin-top: 8px; }
+#edit-bar .eb-row:first-child { margin-top: 0; }
+#edit-bar button {
+  flex: 1; min-height: 56px; border: none; border-radius: 14px;
+  font-size: 15px; font-weight: 600; color: var(--ink);
+  background: rgba(255, 255, 255, 0.1);
+}
+#edit-bar .eb-mode.sel { outline: 2.5px solid #fff; }
+#eb-add.sel { background: #2e7d5b; }
+#eb-erase.sel { background: #b3591f; }
+#edit-bar .eb-save { background: #2979ff; }
+#edit-bar .eb-info { justify-content: center; }
+#eb-brush-label { font-size: 12px; opacity: 0.75; padding: 2px 0; }
 
 /* ---- Green + button ---- */
 #fab-add {

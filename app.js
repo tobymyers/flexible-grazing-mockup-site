@@ -65,6 +65,16 @@ async function loadRegion(region) {
       gapOpenState[region] = saved.state || {};
     }
   } catch (e) { /* no saved gaps, or storage unavailable — start clean */ }
+  // Keep the untouched pipeline shape for "Start over", and restore the
+  // rancher's saved seasonal boundary edits if any exist on this device.
+  out.exclusionPristine = JSON.parse(JSON.stringify(out.exclusion));
+  try {
+    const edit = JSON.parse(localStorage.getItem('riparianEdit:' + region));
+    if (edit && Array.isArray(edit.features)) {
+      out.exclusion = { type: 'FeatureCollection', features: edit.features };
+      out.editSavedAt = edit.savedAt;
+    }
+  } catch (e) { /* no saved edits — use the suggested boundary */ }
   regionData[region] = out;
   // seed gap open/closed state from the data (default: open)
   gapOpenState[region] = gapOpenState[region] || {};
@@ -240,11 +250,21 @@ function addSourcesAndLayers() {
   // Exclusion: translucent light-blue fill, solid edge (calm, not aggressive).
   map.addLayer({
     id: 'exclusion-fill', type: 'fill', source: 'exclusion',
-    paint: { 'fill-color': '#6fb3e8', 'fill-opacity': 0.3 }
+    paint: {
+      'fill-color': '#6fb3e8',
+      // narrow parts (< 25 m wide — below reliable collar enforcement) fade
+      'fill-opacity': ['case', ['==', ['get', 'enforce'], 'narrow'], 0.14, 0.3]
+    }
   });
   map.addLayer({
     id: 'exclusion-line', type: 'line', source: 'exclusion',
+    filter: ['!=', ['get', 'enforce'], 'narrow'],
     paint: { 'line-color': '#4f9fd9', 'line-width': 2 }
+  });
+  map.addLayer({
+    id: 'exclusion-line-narrow', type: 'line', source: 'exclusion',
+    filter: ['==', ['get', 'enforce'], 'narrow'],
+    paint: { 'line-color': '#7fb8d8', 'line-width': 1.5, 'line-dasharray': [1.5, 1.5] }
   });
 
   // Water gaps. OPEN = a real hole cut out of the exclusion polygons (see
@@ -285,6 +305,14 @@ function addSourcesAndLayers() {
       'circle-stroke-color': '#ffffff',
       'circle-stroke-width': 1.5
     }
+  });
+
+  // Brush stroke live preview (boundary edit mode)
+  map.addSource('brush-stroke', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'brush-stroke-line', type: 'line', source: 'brush-stroke',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#4caf87', 'line-width': BRUSH_RADIUS_PX * 2, 'line-opacity': 0.35 }
   });
 
   // Data-source labels: every feature says where its data really came from
@@ -428,6 +456,12 @@ function showExclusionCard(props) {
   const attrs = [];
   if (props.strm_type) attrs.push('dominant Strm_Type: ' + esc(props.strm_type));
   if (props.veg_pct != null) attrs.push('mesic persistence (Veg_Pct): ' + Math.round(props.veg_pct) + '%');
+  const narrowNote = props.enforce === 'narrow'
+    ? '<p class="card-sub" style="color:#ffd28a"><b>Narrow zone</b>: this piece is under 25 m wide everywhere. ' +
+      'Collar GPS error plus the warning band need about 25&ndash;30 m to hold a boundary reliably ' +
+      '(Nofence 25 m rule; AZ Extension 100 ft; USDA burn study used a 30 m cue buffer). ' +
+      'Consider widening it with the brush, or removing it.</p>'
+    : '';
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     '<p class="card-kicker">Exclusion zone</p>' +
@@ -442,9 +476,14 @@ function showExclusionCard(props) {
     '<b>Post-processing</b> (EPSG:6341): dissolve &rarr; morphological closing &plusmn;20 m &rarr; simplify 5 m ' +
     '&rarr; drop holes &lt; 1 ac &rarr; subtract road corridors (TIGER/UGRC centerlines, 5 m half-width) at crossings.' +
     (attrs.length ? '<br><b>This polygon</b>: ' + attrs.join('; ') + '.' : '') +
-    '</p>' +
-    (props.source ? `<p class="card-sub" style="opacity:.7">Source tag: ${esc(props.source)}</p>` : '');
+    '</p>' + narrowNote +
+    (props.source ? `<p class="card-sub" style="opacity:.7">Source tag: ${esc(props.source)}</p>` : '') +
+    (regionData[currentRegion].editSavedAt
+      ? `<p class="card-sub" style="opacity:.7">Your saved 2026 riparian area (edited ${new Date(regionData[currentRegion].editSavedAt).toLocaleDateString()}).</p>`
+      : '') +
+    '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
   $('.card-close').onclick = showHintCard;
+  $('#ex-edit-btn').onclick = enterBoundaryEdit;
 }
 
 function showGapCard(props) {
@@ -548,7 +587,7 @@ function showPlacementCard() {
 }
 
 function enterGapPlacement() {
-  if (placingGap) return;
+  if (placingGap || editMode) return;
   placingGap = true;
   pendingGapCenter = null;
   map.touchZoomRotate.disableRotation();
@@ -615,6 +654,7 @@ let draggingGapId = null;
 
 function wireGapDragging() {
   const start = (e) => {
+    if (editMode) return;
     const f = e.features && e.features[0];
     if (!f || !String(f.properties.id).startsWith('user-')) return;
     e.preventDefault();
@@ -650,6 +690,204 @@ function wireGapDragging() {
   map.on('mouseleave', 'gap-icons', () => { if (!draggingGapId) map.getCanvas().style.cursor = ''; });
 }
 
+/* ---------------- Boundary editing: highlighter & eraser ----------------
+   Per UX research (2 Sep 2026): ranchers reshape the machine-suggested zone
+   by PAINTING area in (green brush) or scribbling it out (orange eraser) —
+   the medical-segmentation-correction pattern. No vertices, ever. One finger
+   paints; pinch zooms (zoom = precision). Undo per stroke; Save stores the
+   result as this season's riparian area on the device. */
+
+const BRUSH_RADIUS_PX = 28; // 56 px diameter — gloved-thumb floor
+let editMode = null;        // null | 'add' | 'erase'
+let strokePts = [];
+let strokeActive = false;
+let editUndoStack = [];
+let editEntrySnapshot = null;
+
+function metersPerPixel() {
+  const c = map.getCenter();
+  const a = map.unproject([0, 300]);
+  const b2 = map.unproject([1, 300]);
+  return turf.distance([a.lng, a.lat], [b2.lng, b2.lat], { units: 'kilometers' }) * 1000 || 1;
+}
+
+function updateBrushLabel() {
+  const el = $('#eb-brush-label');
+  if (!el) return;
+  const m = Math.round(BRUSH_RADIUS_PX * 2 * metersPerPixel());
+  el.innerHTML = 'Brush &asymp; ' + m + ' m on the ground &middot; pinch to zoom for a finer brush';
+}
+
+function cleanedParts(feat, minSqm) {
+  // drop slivers smaller than ~a GPS error circle
+  const flat = turf.flatten(feat);
+  const keep = flat.features.filter(p => turf.area(p) >= minSqm);
+  if (!keep.length) return null;
+  if (keep.length === 1) { keep[0].properties = feat.properties; return keep[0]; }
+  return {
+    type: 'Feature', properties: feat.properties,
+    geometry: { type: 'MultiPolygon', coordinates: keep.map(p => p.geometry.coordinates) }
+  };
+}
+
+function applyStroke() {
+  const pts = strokePts;
+  strokePts = [];
+  map.getSource('brush-stroke').setData({ type: 'FeatureCollection', features: [] });
+  if (!pts.length) return;
+  const rM = BRUSH_RADIUS_PX * metersPerPixel();
+  let swath;
+  try {
+    swath = pts.length < 2
+      ? turf.circle([pts[0].lng, pts[0].lat], rM / 1000, { steps: 16, units: 'kilometers' })
+      : turf.buffer(turf.lineString(pts.map(p => [p.lng, p.lat])), rM, { units: 'meters', steps: 8 });
+  } catch (e) { return; }
+
+  const d = regionData[currentRegion];
+  editUndoStack.push(JSON.stringify(d.exclusion.features));
+  if (editUndoStack.length > 20) editUndoStack.shift();
+
+  const feats = d.exclusion.features;
+  const hit = feats.filter(f => { try { return turf.booleanIntersects(f, swath); } catch (e) { return false; } });
+
+  if (editMode === 'add') {
+    if (!hit.length) {
+      feats.push({
+        type: 'Feature',
+        properties: { id: 'edit-' + Date.now(), kind: 'exclusion', name: 'Added by you', acres: null, editable: true, source: 'rancher edit (brush)' },
+        geometry: swath.geometry
+      });
+    } else {
+      let merged = swath;
+      for (const f of hit) { try { merged = turf.union(turf.featureCollection([merged, f])); } catch (e) {} }
+      merged.properties = hit[0].properties;
+      const keepRest = feats.filter(f => !hit.includes(f));
+      keepRest.push(merged);
+      d.exclusion.features = keepRest;
+    }
+  } else { // erase
+    const next = [];
+    for (const f of feats) {
+      if (!hit.includes(f)) { next.push(f); continue; }
+      let diff = null;
+      try { diff = turf.difference(turf.featureCollection([f, swath])); } catch (e) { next.push(f); continue; }
+      if (diff) {
+        diff.properties = f.properties;
+        const cleaned = cleanedParts(diff, 50);
+        if (cleaned) next.push(cleaned);
+      }
+    }
+    d.exclusion.features = next;
+  }
+  refreshGapSources();
+}
+
+function setEditMode(mode) {
+  editMode = mode;
+  $('#eb-add').classList.toggle('sel', mode === 'add');
+  $('#eb-erase').classList.toggle('sel', mode === 'erase');
+  map.setPaintProperty('brush-stroke-line', 'line-color', mode === 'add' ? '#4caf87' : '#e08a4a');
+}
+
+function enterBoundaryEdit() {
+  if (editMode) return;
+  if (map.getZoom() < 13.5) map.easeTo({ zoom: 14, essential: true });
+  const d = regionData[currentRegion];
+  editEntrySnapshot = JSON.stringify(d.exclusion.features);
+  editUndoStack = [];
+  map.dragPan.disable();
+  $('#edit-bar').hidden = false;
+  $('#card-body').parentElement.style.display = 'none';
+  setEditMode('add');
+  updateBrushLabel();
+  map.on('zoom', updateBrushLabel);
+  toast('Drag one finger to paint. Pinch to zoom.');
+}
+
+function exitBoundaryEdit() {
+  editMode = null;
+  strokeActive = false;
+  strokePts = [];
+  map.getSource('brush-stroke').setData({ type: 'FeatureCollection', features: [] });
+  map.dragPan.enable();
+  map.off('zoom', updateBrushLabel);
+  $('#edit-bar').hidden = true;
+  $('#card-body').parentElement.style.display = '';
+  showHintCard();
+}
+
+function wireBoundaryEditing() {
+  $('#eb-add').onclick = () => setEditMode('add');
+  $('#eb-erase').onclick = () => setEditMode('erase');
+  $('#eb-undo').onclick = () => {
+    const prev = editUndoStack.pop();
+    if (!prev) { toast('Nothing to undo.'); return; }
+    regionData[currentRegion].exclusion.features = JSON.parse(prev);
+    refreshGapSources();
+  };
+  $('#eb-reset').onclick = () => {
+    const d = regionData[currentRegion];
+    editUndoStack.push(JSON.stringify(d.exclusion.features));
+    d.exclusion.features = JSON.parse(JSON.stringify(d.exclusionPristine.features));
+    refreshGapSources();
+    toast('Back to the suggested boundary.');
+  };
+  $('#eb-cancel').onclick = () => {
+    regionData[currentRegion].exclusion.features = JSON.parse(editEntrySnapshot);
+    refreshGapSources();
+    exitBoundaryEdit();
+  };
+  $('#eb-save').onclick = () => {
+    const d = regionData[currentRegion];
+    // keep the saved shape light: ~1 m simplify, per UX research
+    d.exclusion.features = d.exclusion.features.map(f => {
+      try { return Object.assign(turf.simplify(f, { tolerance: 0.00001, highQuality: true }), { properties: f.properties }); }
+      catch (e) { return f; }
+    });
+    try {
+      localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
+        season: '2026', savedAt: Date.now(), features: d.exclusion.features
+      }));
+      d.editSavedAt = Date.now();
+    } catch (e) {}
+    refreshGapSources();
+    exitBoundaryEdit();
+    toast('Saved as your 2026 riparian area. Now check your water gaps.');
+  };
+
+  // one finger paints, second finger cancels the stroke (palm rejection)
+  const begin = (e) => {
+    if (!editMode) return;
+    if (e.points && e.points.length > 1) { strokeActive = false; strokePts = []; return; }
+    e.preventDefault && e.preventDefault();
+    strokeActive = true;
+    strokePts = [e.lngLat];
+  };
+  const moveStroke = (e) => {
+    if (!editMode || !strokeActive) return;
+    if (e.points && e.points.length > 1) {
+      strokeActive = false; strokePts = [];
+      map.getSource('brush-stroke').setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
+    strokePts.push(e.lngLat);
+    if (strokePts.length > 1) {
+      map.getSource('brush-stroke').setData(turf.lineString(strokePts.map(p => [p.lng, p.lat])));
+    }
+  };
+  const endStroke = () => {
+    if (!editMode || !strokeActive) return;
+    strokeActive = false;
+    applyStroke();
+  };
+  map.on('mousedown', begin);
+  map.on('mousemove', moveStroke);
+  map.on('mouseup', endStroke);
+  map.on('touchstart', begin);
+  map.on('touchmove', moveStroke);
+  map.on('touchend', endStroke);
+}
+
 function removeUserGap(props) {
   const feats = regionData[currentRegion].water_gaps.features;
   const i = feats.findIndex(x => x.properties.id === props.id);
@@ -679,7 +917,7 @@ function openSheet(el) {
 }
 
 const LAYER_GROUPS = {
-  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-source-label'],
+  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-source-label'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons'],
   paddock: ['paddock-glow', 'paddock-line', 'paddock-source-label'],
   allotments: ['allotments-line', 'allotments-label'],
@@ -788,6 +1026,7 @@ async function switchRegion(region) {
 
 function wireMapClicks() {
   map.on('click', (e) => {
+    if (editMode) return;
     if (placingGap) { handlePlacementTap(e); return; }
     const gapHits = map.queryRenderedFeatures(e.point, { layers: ['gap-icons', 'gap-fill'] });
     if (gapHits.length) { showGapCard(gapHits[0].properties); return; }
@@ -818,6 +1057,8 @@ async function boot() {
     showUserHeading: true
   });
   map.addControl(geolocate, 'bottom-right'); // container hidden via CSS; custom button triggers it
+  // Scale bar in feet/miles (Adrienne's ask, 2 Sep prototype test).
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'imperial' }), 'bottom-left');
   geolocate.on('trackuserlocationstart', () => $('#btn-locate').classList.add('on'));
   geolocate.on('trackuserlocationend', () => $('#btn-locate').classList.remove('on'));
   geolocate.on('error', () => toast('Could not find your spot. Check that this page is allowed to use your location.'));
@@ -840,6 +1081,7 @@ async function boot() {
     addSourcesAndLayers();
     wireMapClicks();
     wireGapDragging();
+    wireBoundaryEditing();
     // Land the first view on the data itself (real data may sit elsewhere
     // in the region than the hard-coded fallback center).
     const b = regionBounds(currentRegion);

@@ -61,6 +61,23 @@
   </div>
 </div>
 
+<!-- Boundary edit bar (highlighter & eraser mode) -->
+<div id="edit-bar" hidden>
+  <div class="eb-row">
+    <button id="eb-add" class="eb-mode sel">Add land to keep-out</button>
+    <button id="eb-erase" class="eb-mode">Take land out</button>
+  </div>
+  <div class="eb-row eb-info">
+    <span id="eb-brush-label">Brush &asymp; 15 m on the ground &middot; pinch to zoom</span>
+  </div>
+  <div class="eb-row">
+    <button id="eb-undo">Undo</button>
+    <button id="eb-reset">Start over</button>
+    <button id="eb-cancel">Cancel</button>
+    <button id="eb-save" class="eb-save">Save</button>
+  </div>
+</div>
+
 <!-- Green plus button -->
 <button id="fab-add" aria-label="Add">
   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
