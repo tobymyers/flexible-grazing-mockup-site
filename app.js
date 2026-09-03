@@ -445,34 +445,26 @@ function refreshGapSources() {
 const $ = (sel) => document.querySelector(sel);
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, ms) {
   const t = $('#toast');
   t.textContent = msg;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 2600);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms || 2600);
 }
 
+// Map-first (Toby-approved 3 Sep): nothing floats at rest. The map is the
+// app; cards only exist while something is tapped. "showHintCard" now means
+// "return to rest" — every existing caller keeps working.
 function showHintCard() {
-  const d = regionData[currentRegion];
-  let toCheck = 0;
-  try { toCheck = buildReviewList(currentRegion).length; } catch (e) {}
-  const approved = d ? d.exclusion.features.filter(f =>
-    f.properties.established === '2026' ||
-    f.properties.enforce === 'included' ||
-    f.properties.enforce === 'widened').length : 0;
-  const gaps = d ? d.water_gaps.features.filter(f =>
-    String(f.properties.id).startsWith('user-') && f.properties.id !== 'user-pending').length : 0;
-  $('#card-body').innerHTML =
-    '<p class="card-main">Manage riparian exclusions</p>' +
-    '<div class="gap-toggle hint-chips">' +
-    `<button id="chip-check" class="sel-open">&#9888; ${toCheck} to check</button>` +
-    `<button id="chip-approved">&#10003; ${approved} approved</button>` +
-    `<button id="chip-gaps">&#128167; ${gaps} water gap${gaps === 1 ? '' : 's'}</button>` +
-    '</div>';
-  $('#chip-check').onclick = startReview;
-  $('#chip-approved').onclick = () => openAreasSheet('approved');
-  $('#chip-gaps').onclick = () => openAreasSheet('gaps');
+  const c = $('#card');
+  if (c) c.hidden = true;
+  $('#card-body').innerHTML = '';
+}
+
+function revealCard() {
+  const c = $('#card');
+  if (c) c.hidden = false;
 }
 
 function esc(s) {
@@ -480,6 +472,7 @@ function esc(s) {
 }
 
 function showExclusionCard(props) {
+  revealCard();
   const acres = (props.acres != null) ? Math.round(props.acres).toLocaleString() : null;
   const attrs = [];
   if (props.strm_type) attrs.push('dominant Strm_Type: ' + esc(props.strm_type));
@@ -606,6 +599,7 @@ function updateSeasonChip() {
 }
 
 function showSpringCard(props) {
+  revealCard();
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     '<p class="card-kicker">Potential Spring</p>' +
@@ -616,6 +610,7 @@ function showSpringCard(props) {
 }
 
 function showSeasonCard() {
+  revealCard();
   const d = regionData[currentRegion];
   const feats = d.exclusion.features;
   const enforced = feats.filter(f => f.properties.enforce !== 'too_small' && f.properties.enforce !== 'irrigated');
@@ -699,6 +694,7 @@ function goReviewItem() {
     const bb = turf.bbox(f);
     map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 17, duration: 900 });
   } catch (e) {}
+  revealCard();
   // Compact card on purpose: the point is to LOOK at the map, not read.
   // Tap the zone itself for the full technical card.
   const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>'
@@ -786,6 +782,7 @@ function unwidenFeature(fid) {
 }
 
 function showGapCard(props) {
+  revealCard();
   const open = gapOpenState[currentRegion][props.id] !== false;
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
@@ -891,6 +888,7 @@ function pendingFeature() {
 }
 
 function showPlacementCard() {
+  revealCard();
   const has = !!pendingGapCenter;
   $('#card-body').innerHTML =
     '<p class="card-kicker">New water gap</p>' +
@@ -1332,6 +1330,7 @@ function wireIntro() {
   const done = () => {
     $('#intro').hidden = true;
     try { localStorage.setItem('introSeen', '1'); } catch (e) {}
+    toast('Tap any blue area to start.', 4000);
   };
   $('#intro').hidden = false;
   show();
@@ -1374,7 +1373,12 @@ function openAreasSheet(section) {
   }).join('')
     : '<p class="areas-empty">None yet. Tap the Water gap button, then tap the fence line.</p>';
 
-  list.innerHTML =
+  let toCheck = 0;
+  try { toCheck = buildReviewList(currentRegion).length; } catch (e) {}
+  const checkRow = toCheck
+    ? `<button class="area-row" id="areas-check-row"><span>&#9888; Check suggested spots<small>Places the data is not sure about</small></span><span class="area-badge">${toCheck}</span></button>`
+    : '';
+  list.innerHTML = checkRow +
     `<h3 class="area-section-h" id="sec-approved">Approved for 2026 (${mine.length})</h3>` + zoneRows +
     `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows;
 
@@ -1403,6 +1407,13 @@ function openAreasSheet(section) {
       showGapCard(f.properties);
     };
   });
+
+  const cr = $('#areas-check-row');
+  if (cr) cr.onclick = () => {
+    closeSheets();
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
+    startReview();
+  };
 
   openSheet($('#areas-sheet'));
   if (section) {
