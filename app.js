@@ -366,6 +366,23 @@ function addSourcesAndLayers() {
     paint: { ...srcLabelPaint, 'text-color': '#bff0ff' }
   });
 
+  map.addLayer({
+    id: 'gap-name-label', type: 'symbol', source: 'gap-points',
+    minzoom: 14.5,
+    layout: {
+      'text-field': ['get', 'name'],
+      'text-font': firstSymbolFont(),
+      'text-size': 11,
+      'text-offset': [0, 1.6],
+      'text-anchor': 'top'
+    },
+    paint: {
+      'text-color': '#bfe0ff',
+      'text-halo-color': 'rgba(0,0,0,0.85)',
+      'text-halo-width': 1.3
+    }
+  });
+
   // Droplet markers on top.
   map.addLayer({
     id: 'gap-icons', type: 'symbol', source: 'gap-points',
@@ -437,26 +454,25 @@ function toast(msg) {
 }
 
 function showHintCard() {
-  let reviewBtn = '';
-  try {
-    const n = buildReviewList(currentRegion).length;
-    if (n) {
-      reviewBtn = '<button id="review-btn" class="sel-open">' +
-        `Check ${n} spot${n > 1 ? 's' : ''}</button>`;
-    }
-  } catch (e) {}
+  const d = regionData[currentRegion];
+  let toCheck = 0;
+  try { toCheck = buildReviewList(currentRegion).length; } catch (e) {}
+  const approved = d ? d.exclusion.features.filter(f =>
+    f.properties.established === '2026' ||
+    f.properties.enforce === 'included' ||
+    f.properties.enforce === 'widened').length : 0;
+  const gaps = d ? d.water_gaps.features.filter(f =>
+    String(f.properties.id).startsWith('user-') && f.properties.id !== 'user-pending').length : 0;
   $('#card-body').innerHTML =
-    '<p class="card-main">Cows stay out of the shaded blue areas &mdash; proposed riparian exclusions.</p>' +
-    '<p class="card-sub">Tap anything on the map to learn about it.</p>' +
-    '<div class="gap-toggle">' + reviewBtn +
-    '<button id="hint-edit-btn">Edit a zone</button>' +
+    '<p class="card-main">Manage riparian exclusions</p>' +
+    '<div class="gap-toggle hint-chips">' +
+    `<button id="chip-check" class="sel-open">&#9888; ${toCheck} to check</button>` +
+    `<button id="chip-approved">&#10003; ${approved} approved</button>` +
+    `<button id="chip-gaps">&#128167; ${gaps} water gap${gaps === 1 ? '' : 's'}</button>` +
     '</div>';
-  const rb = $('#review-btn');
-  if (rb) rb.onclick = startReview;
-  $('#hint-edit-btn').onclick = () => {
-    editSelectMode = true;
-    toast('Tap the blue area you want to fix.');
-  };
+  $('#chip-check').onclick = startReview;
+  $('#chip-approved').onclick = () => openAreasSheet('approved');
+  $('#chip-gaps').onclick = () => openAreasSheet('gaps');
 }
 
 function esc(s) {
@@ -783,13 +799,32 @@ function showGapCard(props) {
     `<button id="gap-close-btn" class="${open ? '' : 'sel-closed'}">Closed</button>` +
     '</div>' +
     (String(props.id).startsWith('user-')
-      ? '<button id="gap-del-btn" class="gap-remove">Remove this gap</button>'
+      ? '<div class="gap-toggle"><button id="gap-rename-btn">Rename</button></div>' +
+        '<button id="gap-del-btn" class="gap-remove">Remove this gap</button>'
       : '');
   $('.card-close').onclick = showHintCard;
   $('#gap-open-btn').onclick = () => setGap(props, true);
   $('#gap-close-btn').onclick = () => setGap(props, false);
   const del = $('#gap-del-btn');
   if (del) del.onclick = () => removeUserGap(props);
+  const rn = $('#gap-rename-btn');
+  if (rn) rn.onclick = () => {
+    $('#card-body').querySelector('.gap-toggle').outerHTML =
+      '<div class="gap-toggle"><input id="gap-name-input" type="text" maxlength="40" ' +
+      `value="${esc(props.name || '')}"><button id="gap-name-save" class="sel-open">Save</button></div>`;
+    const inp = $('#gap-name-input');
+    inp.focus(); inp.select();
+    $('#gap-name-save').onclick = () => {
+      const nm = inp.value.trim() || 'Water gap';
+      const f = regionData[currentRegion].water_gaps.features.find(x => x.properties.id === props.id);
+      if (f) f.properties.name = nm;
+      props.name = nm;
+      saveUserGaps(currentRegion);
+      refreshGapSources();
+      showGapCard(props);
+      toast('Saved.');
+    };
+  };
 }
 
 function saveUserGaps(region) {
@@ -1223,7 +1258,7 @@ function openSheet(el) {
 
 const LAYER_GROUPS = {
   exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established'],
-  water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons'],
+  water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons', 'gap-name-label'],
   allotments: ['allotments-line', 'allotments-label'],
   ownership: ['ownership-fill', 'ownership-source-label'],
   springs: ['springs-dot', 'springs-source-label']
@@ -1307,7 +1342,7 @@ function wireIntro() {
   $('#intro-skip').onclick = done;
 }
 
-function openAreasSheet() {
+function openAreasSheet(section) {
   const list = $('#areas-list');
   const d = regionData[currentRegion];
   const feats = d ? d.exclusion.features : [];
@@ -1315,59 +1350,65 @@ function openAreasSheet() {
     f.properties.established === '2026' ||
     f.properties.enforce === 'included' ||
     f.properties.enforce === 'widened');
-  // Water gaps the rancher placed (skip a half-placed one still being set down)
   const myGaps = (d ? d.water_gaps.features : []).filter(f =>
     String(f.properties.id).startsWith('user-') && f.properties.id !== 'user-pending');
-  if (!mine.length && !myGaps.length) {
-    list.innerHTML = '<p class="areas-empty">Nothing saved yet. Tap an exclusion zone on the map and choose ' +
-      '"Mark established for 2026" — it will show up here with a gold outline on the map. ' +
-      'Water gaps you place show up here too.</p>';
-  } else {
-    const zoneRows = mine.map(f => {
-      const p = f.properties;
-      const what = p.established === '2026' ? 'Established 2026'
-        : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
-      const ac = p.acres != null ? Math.round(p.acres).toLocaleString() + ' acres' : '';
-      return `<button class="area-row" data-fid="${esc(p.id)}">` +
-        `<span>${esc(p.name || 'Area')}<small>${ac}</small></span>` +
-        `<span class="area-badge">${what}</span></button>`;
-    }).join('');
-    const gapRows = myGaps.map(f => {
-      const p = f.properties;
-      const closed = gapOpenState[currentRegion] && gapOpenState[currentRegion][p.id] === false;
-      const sub = closed ? 'Closed — cows cannot drink here' : 'Open — cows can drink here';
-      return `<button class="area-row" data-gid="${esc(p.id)}">` +
-        `<span>${esc(p.name || 'Water gap')}<small>${sub}</small></span>` +
-        `<span class="area-badge gap">Water gap${closed ? ' · closed' : ''}</span></button>`;
-    }).join('');
-    list.innerHTML = zoneRows + gapRows;
-    list.querySelectorAll('.area-row[data-fid]').forEach(btn => {
-      btn.onclick = () => {
-        const f = feats.find(x => x.properties.id === btn.dataset.fid);
-        closeSheets();
-        document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
-        if (!f) return;
-        try {
-          const bb = turf.bbox(f);
-          map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 16.5, duration: 800 });
-        } catch (e) {}
-        showExclusionCard(f.properties);
-      };
-    });
-    list.querySelectorAll('.area-row[data-gid]').forEach(btn => {
-      btn.onclick = () => {
-        const f = myGaps.find(x => x.properties.id === btn.dataset.gid);
-        closeSheets();
-        document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
-        if (!f) return;
-        try {
-          map.easeTo({ center: f.geometry.coordinates, zoom: 16, duration: 800 });
-        } catch (e) {}
-        showGapCard(f.properties);
-      };
-    });
-  }
+
+  const zoneRows = mine.length ? mine.map(f => {
+    const p = f.properties;
+    const what = p.established === '2026' ? 'Established 2026'
+      : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
+    const ac = p.acres != null ? Math.round(p.acres).toLocaleString() + (Math.round(p.acres) === 1 ? ' acre' : ' acres') : '';
+    return `<button class="area-row" data-fid="${esc(p.id)}">` +
+      `<span>${esc(p.name || 'Area')}<small>${ac}</small></span>` +
+      `<span class="area-badge">${what}</span></button>`;
+  }).join('')
+    : '<p class="areas-empty">None yet. Tap a blue area, then "Mark established for 2026."</p>';
+
+  const gapRows = myGaps.length ? myGaps.map(f => {
+    const p = f.properties;
+    const closed = gapOpenState[currentRegion] && gapOpenState[currentRegion][p.id] === false;
+    const sub = closed ? 'Closed. Cows cannot drink here.' : 'Open. Cows can drink here.';
+    return `<button class="area-row" data-gid="${esc(p.id)}">` +
+      `<span>${esc(p.name || 'Water gap')}<small>${sub}</small></span>` +
+      `<span class="area-badge gap">Water gap${closed ? ' &middot; closed' : ''}</span></button>`;
+  }).join('')
+    : '<p class="areas-empty">None yet. Tap the Water gap button, then tap the fence line.</p>';
+
+  list.innerHTML =
+    `<h3 class="area-section-h" id="sec-approved">Approved for 2026 (${mine.length})</h3>` + zoneRows +
+    `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows;
+
+  list.querySelectorAll('.area-row[data-fid]').forEach(btn => {
+    btn.onclick = () => {
+      const f = feats.find(x => x.properties.id === btn.dataset.fid);
+      closeSheets();
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
+      if (!f) return;
+      try {
+        const bb = turf.bbox(f);
+        map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 16.5, duration: 800 });
+      } catch (e) {}
+      showExclusionCard(f.properties);
+    };
+  });
+  list.querySelectorAll('.area-row[data-gid]').forEach(btn => {
+    btn.onclick = () => {
+      const f = myGaps.find(x => x.properties.id === btn.dataset.gid);
+      closeSheets();
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
+      if (!f) return;
+      try {
+        map.easeTo({ center: f.geometry.coordinates, zoom: 16, duration: 800 });
+      } catch (e) {}
+      showGapCard(f.properties);
+    };
+  });
+
   openSheet($('#areas-sheet'));
+  if (section) {
+    const h = $(section === 'gaps' ? '#sec-gaps' : '#sec-approved');
+    if (h) h.scrollIntoView({ block: 'start' });
+  }
 }
 
 // Camera for a region: fit the paddock (or exclusion) bounds from the data
