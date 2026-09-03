@@ -471,8 +471,11 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+let lastZoneId = null;
+
 function showExclusionCard(props) {
   revealCard();
+  lastZoneId = props.id;
   const acres = (props.acres != null) ? Math.round(props.acres).toLocaleString() : null;
   const attrs = [];
   if (props.strm_type) attrs.push('dominant Strm_Type: ' + esc(props.strm_type));
@@ -510,28 +513,36 @@ function showExclusionCard(props) {
   }
   const isGuard = !!props.spring_guard;
   const est = props.established === '2026';
-  const estBtn = (!narrowNote && ['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard)
+  const lifecycle = (!narrowNote && ['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard);
+  const edited = !!props._edited;
+  const badge = lifecycle
+    ? (est ? '<span class="zone-badge gold">Established 2026</span>'
+       : edited ? '<span class="zone-badge mid">Edited &middot; not yet established</span>'
+       : '<span class="zone-badge prop">Proposed</span>')
+    : '';
+  const estBtn = lifecycle
     ? (est
-      ? '<p class="card-sub" style="color:#d9a03a"><b>Established for the 2026 season.</b></p>' +
-        '<div class="gap-toggle"><button id="ex-unest-btn">Un-mark</button></div>'
-      : '<div class="gap-toggle"><button id="ex-est-btn" class="sel-open">Mark established for 2026</button></div>')
+      ? '<div class="gap-toggle"><button id="ex-unest-btn">Un-mark established</button></div>'
+      : `<div class="gap-toggle"><button id="ex-est-btn" class="${edited ? 'sel-open' : ''}">Mark established for 2026</button></div>`)
     : '';
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     `<p class="card-kicker">${isGuard ? 'Spring guard' : 'Exclusion zone'}</p>` +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${acres ? ' &middot; ' + acres + ' acres' : ''}</p>` +
+    badge +
     (isGuard
       ? '<p class="card-sub">A ready-made circle around a mapped spring, sized so collars can hold it. ' +
         'If this spring is not real any more, remove it.</p>' +
         '<div class="gap-toggle"><button id="ex-guard-off">Remove this guard</button></div>'
-      : '<p class="card-sub">This spot stays green late into the summer, year after year. Keeping cows out protects the water and the banks.</p>') +
+      : '') +
     '<details class="data-details"><summary>Where this comes from</summary>' +
     '<p class="card-sub">Drawn from 40 years of satellite pictures: a spot counts when it was green in at least 5 of the last 10 summers and is not irrigated farm ground. ' +
     'Data: Univ. of Montana mesic maps, USGS water maps, IrrMapper irrigation maps.' +
     (attrs.length ? '<br>This piece: ' + attrs.join('; ') + '.' : '') +
     (props.source ? '<br>Source tag: ' + esc(props.source) : '') + '</p></details>' +
-    narrowNote + estBtn +
-    '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
+    narrowNote +
+    '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>' +
+    estBtn;
   $('.card-close').onclick = showHintCard;
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
   const wbtn = $('#ex-widen-btn');
@@ -1020,6 +1031,7 @@ let strokePts = [];
 let strokeActive = false;
 let editUndoStack = [];
 let editEntrySnapshot = null;
+let editTouchedIds = new Set();
 
 function metersPerPixel() {
   const c = map.getCenter();
@@ -1067,11 +1079,14 @@ function applyStroke() {
   const feats = d.exclusion.features;
   const hit = feats.filter(f => { try { return turf.booleanIntersects(f, swath); } catch (e) { return false; } });
 
+  for (const f of hit) editTouchedIds.add(f.properties.id);
   if (editMode === 'add') {
     if (!hit.length) {
+      const nid = 'edit-' + Date.now();
+      editTouchedIds.add(nid);
       feats.push({
         type: 'Feature',
-        properties: { id: 'edit-' + Date.now(), kind: 'exclusion', name: 'Added by you', acres: null, editable: true, source: 'rancher edit (brush)' },
+        properties: { id: nid, kind: 'exclusion', name: 'Added by you', acres: null, editable: true, source: 'rancher edit (brush)' },
         geometry: swath.geometry
       });
     } else {
@@ -1112,6 +1127,7 @@ function enterBoundaryEdit() {
   const d = regionData[currentRegion];
   editEntrySnapshot = JSON.stringify(d.exclusion.features);
   editUndoStack = [];
+  editTouchedIds = new Set();
   map.dragPan.disable();
   $('#edit-bar').hidden = false;
   $('#card-body').parentElement.style.display = 'none';
@@ -1167,10 +1183,30 @@ function wireBoundaryEditing() {
       }));
       d.editSavedAt = Date.now();
     } catch (e) {}
+    // lifecycle: touched zones become "edited"; an established zone that
+    // changed loses its established mark (approval must match the shape)
+    let changedEstablished = false;
+    for (const f of d.exclusion.features) {
+      if (!editTouchedIds.has(f.properties.id)) continue;
+      f.properties._edited = true;
+      if (f.properties.established === '2026') {
+        delete f.properties.established;
+        changedEstablished = true;
+      }
+    }
+    try {
+      localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
+        season: '2026', savedAt: Date.now(), features: d.exclusion.features
+      }));
+    } catch (e) {}
     refreshGapSources();
     updateSeasonChip();
     exitBoundaryEdit();
-    toast('Saved as your 2026 riparian area. Now check your water gaps.');
+    const zone = lastZoneId && d.exclusion.features.find(x => x.properties.id === lastZoneId);
+    if (zone) showExclusionCard(zone.properties);
+    toast(changedEstablished
+      ? 'This zone changed. Mark it established again when it looks right.'
+      : 'Changes saved.');
   };
 
   // One finger paints. TWO fingers move the map (so wide riparian areas can
