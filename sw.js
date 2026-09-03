@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const VERSION = 'rip-mockup-v8';
+const VERSION = 'rip-mockup-v9';
 const SHELL_CACHE = VERSION + '-shell';
 const TILE_CACHE = VERSION + '-tiles';
 

@@ -373,9 +373,9 @@ function addSourcesAndLayers() {
     id: 'springs-source-label', type: 'symbol', source: 'springs',
     minzoom: 13.5,
     layout: {
-      'text-field': ['get', 'source'],
+      'text-field': 'Spring',
       'text-font': firstSymbolFont(),
-      'text-size': 9,
+      'text-size': 10,
       'text-offset': [0, 1.1],
       'text-anchor': 'top'
     },
@@ -538,6 +538,19 @@ function updateSeasonChip() {
   } else {
     chip.hidden = true;
   }
+}
+
+function showSpringCard(props) {
+  $('#card-body').innerHTML =
+    '<button class="card-close" aria-label="Close">&times;</button>' +
+    '<p class="card-kicker">Spring</p>' +
+    `<p class="card-main">${esc(props.name || 'Mapped spring')}</p>` +
+    '<p class="card-sub">A spring or seep on the government water map (USGS 3DHP hydrography). ' +
+    'The dot marks a location, not a size — some records are decades old, and a few springs are ' +
+    'now dry or piped to a trough. Treat it as a hint: check the spot, and if it is wet and ' +
+    'matters, paint a keep-out around it with the brush.</p>' +
+    (props.source ? `<p class="card-sub" style="opacity:.7">Source tag: ${esc(props.source)}</p>` : '');
+  $('.card-close').onclick = showHintCard;
 }
 
 function showSeasonCard() {
@@ -1252,6 +1265,8 @@ function wireMapClicks() {
     if (placingGap) { handlePlacementTap(e); return; }
     const gapHits = map.queryRenderedFeatures(e.point, { layers: ['gap-icons', 'gap-fill'] });
     if (gapHits.length) { showGapCard(gapHits[0].properties); return; }
+    const spHits = map.queryRenderedFeatures(e.point, { layers: ['springs-dot'] });
+    if (spHits.length) { showSpringCard(spHits[0].properties); return; }
     const exHits = map.queryRenderedFeatures(e.point, { layers: ['exclusion-fill'] });
     if (exHits.length) { showExclusionCard(exHits[0].properties); return; }
   });
