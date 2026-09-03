@@ -251,20 +251,19 @@ function addSourcesAndLayers() {
   map.addLayer({
     id: 'exclusion-fill', type: 'fill', source: 'exclusion',
     paint: {
-      // narrow (< 25 m wide) fades; too_small ghosts show amber ("needs
-      // your decision"); everything else solid blue
-      'fill-color': ['case',
-        ['==', ['get', 'enforce'], 'too_small'], '#ffd28a',
-        '#6fb3e8'],
+      // ghosts (too_small + irrigated) = faint blue with dotted edge;
+      // narrow fades; everything else solid blue
+      'fill-color': '#6fb3e8',
       'fill-opacity': ['case',
-        ['==', ['get', 'enforce'], 'too_small'], 0.18,
+        ['==', ['get', 'enforce'], 'too_small'], 0.12,
+        ['==', ['get', 'enforce'], 'irrigated'], 0.12,
         ['==', ['get', 'enforce'], 'narrow'], 0.14,
         0.3]
     }
   });
   map.addLayer({
     id: 'exclusion-line', type: 'line', source: 'exclusion',
-    filter: ['all', ['!=', ['get', 'enforce'], 'narrow'], ['!=', ['get', 'enforce'], 'too_small']],
+    filter: ['all', ['!=', ['get', 'enforce'], 'narrow'], ['!=', ['get', 'enforce'], 'too_small'], ['!=', ['get', 'enforce'], 'irrigated']],
     paint: { 'line-color': '#4f9fd9', 'line-width': 2 }
   });
   map.addLayer({
@@ -274,8 +273,8 @@ function addSourcesAndLayers() {
   });
   map.addLayer({
     id: 'exclusion-line-toosmall', type: 'line', source: 'exclusion',
-    filter: ['==', ['get', 'enforce'], 'too_small'],
-    paint: { 'line-color': '#ffcf7d', 'line-width': 2, 'line-dasharray': [0.6, 1.6] }
+    filter: ['any', ['==', ['get', 'enforce'], 'too_small'], ['==', ['get', 'enforce'], 'irrigated']],
+    paint: { 'line-color': '#7fb8d8', 'line-width': 2, 'line-dasharray': [0.6, 1.6] }
   });
 
   // Water gaps. OPEN = a real hole cut out of the exclusion polygons (see
@@ -491,6 +490,18 @@ function showExclusionCard(props) {
       'no collar system has ever held a boundary that tight, so it is not part of the keep-out area. ' +
       'If it matters (a seep, a spring), widen it: the whole widened circle becomes the keep-out.</p>' +
       '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to protect this spot</button></div>';
+  } else if (props.enforce === 'irrigated') {
+    narrowNote =
+      '<p class="card-sub" style="color:#bfe0ff"><b>Watered ground</b>: this land is green because it gets ' +
+      'irrigated (satellite irrigation map, 2+ of the last 10 years' +
+      (props.irr_freq != null ? ' &mdash; watered in ' + Math.round(props.irr_freq * 10) + ' of 10' : '') +
+      '). It is not part of the keep-out area by default. If it should be, add it.</p>' +
+      '<div class="gap-toggle"><button id="ex-promote-btn" class="sel-open">Add to exclusion</button></div>';
+  } else if (props.enforce === 'included') {
+    narrowNote =
+      '<p class="card-sub" style="color:#9fe3b9"><b>Added by you</b>: watered ground you chose to include ' +
+      'in the keep-out area.</p>' +
+      '<div class="gap-toggle"><button id="ex-demote-btn">Remove again</button></div>';
   } else if (props.enforce === 'widened') {
     narrowNote =
       '<p class="card-sub" style="color:#9fe3b9"><b>Widened by you</b>: grown by 15 m on every side so the ' +
@@ -502,10 +513,10 @@ function showExclusionCard(props) {
     '<p class="card-kicker">Exclusion zone</p>' +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${acres ? ' &middot; ' + acres + ' acres' : ''}</p>` +
     '<p class="card-sub" style="font-size:12px;line-height:1.5">' +
-    '<b>Selection rule</b> (per mesic valley-bottom segment): ' +
-    '(Strm_Type &isin; {Perennial, Intermittent} AND Veg_Pct &gt; 50) OR ' +
-    '(Veg_Pct + Tree_Pct &gt; 60 AND Tree_Pct &gt; 15); Slope_Deg &lt; 15&deg;; area &ge; 0.25 ac; ' +
-    'segments deduped on geometry WKB.<br>' +
+    '<b>Selection rule (V3)</b> (per mesic valley-bottom segment): ' +
+    'mean late-season NDVI &ge; 0.3 in &ge; 5 of the last 10 years (2016&ndash;2025, Landsat 30 m) ' +
+    'AND IrrMapper irrigation frequency &lt; 0.2. Green-but-irrigated segments render as dotted ghosts. ' +
+    'No stream-type, slope, or area gates; segments deduped on geometry WKB.<br>' +
     '<b>Inputs</b>: Mesic Analysis Platform valley-bottom segments (30 m Landsat, 1984&ndash;2025 late-season NDVI persistence) ' +
     '&cup; NWI riparian + wetland supplement &cup; USGS 3DHP hydrography.<br>' +
     '<b>Post-processing</b> (EPSG:6341): dissolve &rarr; morphological closing &plusmn;20 m &rarr; simplify 5 m ' +
@@ -523,6 +534,22 @@ function showExclusionCard(props) {
   if (wbtn) wbtn.onclick = () => widenFeature(props.id);
   const ubtn = $('#ex-unwiden-btn');
   if (ubtn) ubtn.onclick = () => unwidenFeature(props.id);
+  const pbtn = $('#ex-promote-btn');
+  if (pbtn) pbtn.onclick = () => setEnforce(props.id, 'included', 'Added to the keep-out area.');
+  const dbtn = $('#ex-demote-btn');
+  if (dbtn) dbtn.onclick = () => setEnforce(props.id, 'irrigated', 'Back to watered-ground status.');
+}
+
+// Flip a feature between ghost and included (no geometry change), persisted
+// with the seasonal edit.
+function setEnforce(fid, val, msg) {
+  const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
+  if (!f) return;
+  f.properties.enforce = val;
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showExclusionCard(f.properties);
+  toast(msg);
 }
 
 /* ---------------- Saved-season chip + guided review tour ---------------- */
@@ -553,7 +580,7 @@ function showSpringCard(props) {
 function showSeasonCard() {
   const d = regionData[currentRegion];
   const feats = d.exclusion.features;
-  const enforced = feats.filter(f => f.properties.enforce !== 'too_small');
+  const enforced = feats.filter(f => f.properties.enforce !== 'too_small' && f.properties.enforce !== 'irrigated');
   const totalAc = Math.round(enforced.reduce((a, f) => a + (f.properties.acres || 0), 0));
   const widened = feats.filter(f => f.properties.enforce === 'widened').length;
   $('#card-body').innerHTML =
@@ -599,9 +626,10 @@ function buildReviewList(region) {
     feats.filter(f => f.properties.enforce === flag).sort(byAcres).slice(0, n)
       .map(f => ({ f, reason }));
   return [
-    ...pick('too_small', 6, 'Small wet spot — widen it to protect it, or leave it out.'),
-    ...pick('narrow', 3, 'Narrow piece — collars may not hold it. Widen or shrink it away.'),
-    ...pick('ok', 3, 'One of your biggest zones — check the edges match your land.')
+    ...pick('irrigated', 4, 'Watered ground — green because it gets irrigated. Add it if it should be kept out.'),
+    ...pick('too_small', 4, 'Small wet spot — widen it to protect it, or leave it out.'),
+    ...pick('narrow', 2, 'Narrow piece — collars may not hold it. Widen or shrink it away.'),
+    ...pick('ok', 2, 'One of your biggest zones — check the edges match your land.')
   ].slice(0, 12);
 }
 
