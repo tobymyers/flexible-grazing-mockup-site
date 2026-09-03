@@ -104,10 +104,16 @@ body {
 .switch-row input:checked::after { left: 23px; }
 .sheet-note { color: var(--muted); font-size: 13px; margin: 12px 0 0; }
 
-/* ---- Bottom card ---- */
-.card {
+/* ---- Bottom row: info card + water-gap button ---- */
+#bottom-row {
   position: fixed; z-index: 15;
-  left: 14px; right: 84px; bottom: calc(96px + var(--safe-b));
+  left: 14px; right: 14px; bottom: calc(96px + var(--safe-b));
+  display: flex; align-items: flex-end; gap: 10px;
+  pointer-events: none;
+}
+#bottom-row > * { pointer-events: auto; }
+.card {
+  position: relative; flex: 1; min-width: 0;
   background: var(--bg); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   border-radius: var(--radius); padding: 14px 16px;
   box-shadow: 0 2px 12px rgba(0,0,0,.35);
@@ -154,16 +160,18 @@ body {
 #edit-bar .eb-info { justify-content: center; }
 #eb-brush-label { font-size: 12px; opacity: 0.75; padding: 2px 0; }
 
-/* ---- Green + button ---- */
+/* ---- "Water gap" extended button (add a water gap) ---- */
 #fab-add {
-  position: fixed; right: 16px; bottom: calc(96px + var(--safe-b)); z-index: 15;
-  width: 58px; height: 58px; border-radius: 50%; border: none; cursor: pointer;
+  flex: none; margin-left: auto; /* stays bottom-right even when the card is hidden */
+  height: 58px; border-radius: 999px; border: none; cursor: pointer;
+  padding: 0 20px 0 16px;
   background: var(--mint); color: #0c2018;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: inherit; font-size: 15px; font-weight: 700; white-space: nowrap;
   box-shadow: 0 4px 14px rgba(0,0,0,.4);
 }
-#fab-add svg { width: 26px; height: 26px; }
-#fab-add:active { transform: scale(.94); background: var(--mint-dark); }
+#fab-add svg { width: 24px; height: 24px; fill: #2979ff; flex: none; }
+#fab-add:active { transform: scale(.96); background: var(--mint-dark); }
 
 /* ---- Bottom nav ---- */
 #bottom-nav {
@@ -252,8 +260,13 @@ body {
   flex: none; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border-radius: 999px;
   background: rgba(217, 160, 58, 0.18); color: var(--mint);
 }
+.area-row .area-badge.gap { background: rgba(41, 121, 255, 0.2); color: #8fb5ff; }
 .areas-empty { color: var(--muted); font-size: 14px; line-height: 1.5; padding: 10px 2px 4px; }
 
 /* Collapsible data details on cards */
 .data-details summary { color: var(--muted); font-size: 13px; cursor: pointer; margin-top: 8px; }
 .data-details p { font-size: 12px; }
+
+.info-list { margin: 6px 0 0; padding-left: 20px; }
+.info-list li { font-size: 14.5px; line-height: 1.45; color: var(--muted); margin-bottom: 9px; }
+.info-list li b { color: var(--ink); }

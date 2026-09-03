@@ -439,15 +439,22 @@ function showHintCard() {
   try {
     const n = buildReviewList(currentRegion).length;
     if (n) {
-      reviewBtn = '<div class="gap-toggle"><button id="review-btn" class="sel-open">' +
-        `Check ${n} suggested spot${n > 1 ? 's' : ''}</button></div>`;
+      reviewBtn = '<button id="review-btn" class="sel-open">' +
+        `Check ${n} spot${n > 1 ? 's' : ''}</button>`;
     }
   } catch (e) {}
   $('#card-body').innerHTML =
-    '<p class="card-main">Cows stay out of the shaded blue areas. Tap anything on the map to learn about it.</p>' +
-    reviewBtn;
+    '<p class="card-main">Cows stay out of the shaded blue areas &mdash; proposed riparian exclusions.</p>' +
+    '<p class="card-sub">Tap anything on the map to learn about it.</p>' +
+    '<div class="gap-toggle">' + reviewBtn +
+    '<button id="hint-edit-btn">Edit a zone</button>' +
+    '</div>';
   const rb = $('#review-btn');
   if (rb) rb.onclick = startReview;
+  $('#hint-edit-btn').onclick = () => {
+    editSelectMode = true;
+    toast('Tap the blue area you want to fix.');
+  };
 }
 
 function esc(s) {
@@ -807,6 +814,7 @@ function setGap(props, open) {
    Cancel throws it away. Fixed 30 m width; nothing small to drag. */
 
 let placingGap = false;
+let editSelectMode = false;
 let pendingGapCenter = null;
 let userGapCounter = 0;
 
@@ -1199,6 +1207,7 @@ function closeSheets() {
   $('#layer-sheet').hidden = true;
   $('#region-menu').hidden = true;
   $('#areas-sheet').hidden = true;
+  $('#info-sheet').hidden = true;
   if (scrimEl) { scrimEl.remove(); scrimEl = null; }
 }
 function openSheet(el) {
@@ -1220,6 +1229,7 @@ const LAYER_GROUPS = {
 
 function wireUI() {
   $('#btn-layers').onclick = () => openSheet($('#layer-sheet'));
+  $('#btn-info').onclick = () => openSheet($('#info-sheet'));
   $('#region-pill').onclick = () => openSheet($('#region-menu'));
   $('#btn-home').onclick = () => flyToRegion(currentRegion);
   $('#btn-locate').onclick = () => {
@@ -1267,7 +1277,7 @@ const INTRO_STEPS = [
   { title: 'You know this land better than a satellite',
     body: 'Tap any area to see why it is there. Dotted areas are questions, not rules — watered hay ground and tiny wet spots. Tap one to decide.' },
   { title: 'Fix it with your finger',
-    body: 'Tap an area, then "Adjust boundary" to paint it bigger or smaller. Tap + to add a water gap where cows should drink. Tip: pan the map on WiFi first so it works out of service.' }
+    body: 'Tap an area, then "Adjust boundary" to paint it bigger or smaller. Tap the "Water gap" button to add a drink spot where cows should walk in. Tip: pan the map on WiFi first so it works out of service.' }
 ];
 let introIdx = 0;
 
@@ -1297,16 +1307,21 @@ function wireIntro() {
 
 function openAreasSheet() {
   const list = $('#areas-list');
-  const feats = regionData[currentRegion] ? regionData[currentRegion].exclusion.features : [];
+  const d = regionData[currentRegion];
+  const feats = d ? d.exclusion.features : [];
   const mine = feats.filter(f =>
     f.properties.established === '2026' ||
     f.properties.enforce === 'included' ||
     f.properties.enforce === 'widened');
-  if (!mine.length) {
+  // Water gaps the rancher placed (skip a half-placed one still being set down)
+  const myGaps = (d ? d.water_gaps.features : []).filter(f =>
+    String(f.properties.id).startsWith('user-') && f.properties.id !== 'user-pending');
+  if (!mine.length && !myGaps.length) {
     list.innerHTML = '<p class="areas-empty">Nothing saved yet. Tap an exclusion zone on the map and choose ' +
-      '"Mark established for 2026" — it will show up here with a gold outline on the map.</p>';
+      '"Mark established for 2026" — it will show up here with a gold outline on the map. ' +
+      'Water gaps you place show up here too.</p>';
   } else {
-    list.innerHTML = mine.map(f => {
+    const zoneRows = mine.map(f => {
       const p = f.properties;
       const what = p.established === '2026' ? 'Established 2026'
         : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
@@ -1315,7 +1330,16 @@ function openAreasSheet() {
         `<span>${esc(p.name || 'Area')}<small>${ac}</small></span>` +
         `<span class="area-badge">${what}</span></button>`;
     }).join('');
-    list.querySelectorAll('.area-row').forEach(btn => {
+    const gapRows = myGaps.map(f => {
+      const p = f.properties;
+      const closed = gapOpenState[currentRegion] && gapOpenState[currentRegion][p.id] === false;
+      const sub = closed ? 'Closed — cows cannot drink here' : 'Open — cows can drink here';
+      return `<button class="area-row" data-gid="${esc(p.id)}">` +
+        `<span>${esc(p.name || 'Water gap')}<small>${sub}</small></span>` +
+        `<span class="area-badge gap">Water gap${closed ? ' · closed' : ''}</span></button>`;
+    }).join('');
+    list.innerHTML = zoneRows + gapRows;
+    list.querySelectorAll('.area-row[data-fid]').forEach(btn => {
       btn.onclick = () => {
         const f = feats.find(x => x.properties.id === btn.dataset.fid);
         closeSheets();
@@ -1326,6 +1350,18 @@ function openAreasSheet() {
           map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 16.5, duration: 800 });
         } catch (e) {}
         showExclusionCard(f.properties);
+      };
+    });
+    list.querySelectorAll('.area-row[data-gid]').forEach(btn => {
+      btn.onclick = () => {
+        const f = myGaps.find(x => x.properties.id === btn.dataset.gid);
+        closeSheets();
+        document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
+        if (!f) return;
+        try {
+          map.easeTo({ center: f.geometry.coordinates, zoom: 16, duration: 800 });
+        } catch (e) {}
+        showGapCard(f.properties);
       };
     });
   }
@@ -1388,7 +1424,12 @@ function wireMapClicks() {
     const spHits = map.queryRenderedFeatures(e.point, { layers: ['springs-dot'] });
     if (spHits.length) { showSpringCard(spHits[0].properties); return; }
     const exHits = map.queryRenderedFeatures(e.point, { layers: ['exclusion-fill'] });
-    if (exHits.length) { showExclusionCard(exHits[0].properties); return; }
+    if (exHits.length) {
+      if (editSelectMode) { editSelectMode = false; enterBoundaryEdit(); return; }
+      showExclusionCard(exHits[0].properties);
+      return;
+    }
+    editSelectMode = false;
   });
   for (const id of ['gap-icons', 'gap-fill', 'exclusion-fill']) {
     map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });

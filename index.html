@@ -25,6 +25,9 @@
   <button class="round-btn" id="btn-layers" aria-label="Choose what shows on the map">
     <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m4.6 12.6 7.4 4.1 7.4-4.1L21 14l-9 5-9-5z"/></svg>
   </button>
+  <button class="round-btn" id="btn-info" aria-label="How we draw these zones">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 10.5v6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="7.2" r="1.4"/></svg>
+  </button>
 </div>
 
 <!-- Region switcher pill -->
@@ -51,9 +54,15 @@
   </div>
 </div>
 
-<!-- Bottom info card (hint / feature details) -->
-<div id="card" class="card">
-  <div id="card-body"></div>
+<!-- Bottom row: info card (hint / feature details) + add-water-gap button -->
+<div id="bottom-row">
+  <div id="card" class="card">
+    <div id="card-body"></div>
+  </div>
+  <button id="fab-add" aria-label="Add a water gap">
+    <svg viewBox="0 0 24 24"><path d="M12 2.5c4.2 5.2 7 8.9 7 12.7a7 7 0 1 1-14 0c0-3.8 2.8-7.5 7-12.7z"/></svg>
+    <span>Water gap</span>
+  </button>
 </div>
 
 <!-- Boundary edit bar (highlighter & eraser mode) -->
@@ -73,10 +82,27 @@
   </div>
 </div>
 
-<!-- Add water gap button -->
-<button id="fab-add" aria-label="Add a water gap">
-  <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
-</button>
+<!-- How-we-draw-these info sheet -->
+<div id="info-sheet" class="sheet" hidden>
+  <div class="sheet-grab"></div>
+  <h2>How we draw the riparian zones</h2>
+  <ol class="info-list">
+    <li><b>Creek bottoms.</b> University of Montana's mesic maps outline every valley
+    bottom in the sagebrush West (Landsat satellite, 30&nbsp;m).</li>
+    <li><b>The green test.</b> A spot counts if it stayed green late into summer in at
+    least 5 of the last 10 years.</li>
+    <li><b>The irrigation check.</b> Land that is green because someone waters it
+    (IrrMapper) is <b>not</b> excluded &mdash; it shows dotted, for you to decide.</li>
+    <li><b>Water itself.</b> Federal river and wetland maps (USGS, US Fish &amp;
+    Wildlife) fill in the channels. Mapped springs get a ready-made guard circle.</li>
+    <li><b>Collar limits.</b> Anything under 10&nbsp;m wide is dropped &mdash; collars
+    cannot hold a line that tight. Under 25&nbsp;m shows faded as "narrow."</li>
+    <li><b>Roads stay open.</b> And every line here is a proposal &mdash; the rancher's
+    edits are the final word.</li>
+  </ol>
+  <p class="sheet-note">Rule V3 &middot; 3 Sep 2026 &middot; Sources: UM Mesic Analysis
+  Platform, USGS 3DHP, USFWS NWI, IrrMapper, BLM allotments.</p>
+</div>
 
 <!-- Layer sheet -->
 <div id="layer-sheet" class="sheet" hidden>
