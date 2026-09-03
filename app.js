@@ -16,7 +16,7 @@ const BASEMAP_STYLE = 'https://basemapstyles-api.arcgis.com/arcgis/rest/services
 const DATA_ROOT = 'data';
 const STUB_ROOT = 'stub-data';
 
-const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs'];
+const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads'];
 
 const REGIONS = {
   'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4 },
@@ -677,14 +677,15 @@ function goReviewItem() {
   // Compact card on purpose: the point is to LOOK at the map, not read.
   // Tap the zone itself for the full technical card.
   const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>'
-    : (p.enforce === 'irrigated') ? '<button id="rv-widen">Add it</button>' : '';
+    : (p.enforce === 'irrigated') ? '<button id="rv-widen">Add it to the exclusion area</button>' : '';
   $('#card-body').innerHTML =
+    '<button class="card-close" id="rv-stop" aria-label="Stop checking">&times;</button>' +
     `<p class="card-kicker">Check ${reviewIdx + 1} of ${reviewList.length}</p>` +
     `<p class="card-sub" style="margin-top:2px">${item.reason}</p>` +
-    '<div class="gap-toggle">' + canWiden +
+    (canWiden ? '<div class="gap-toggle">' + canWiden + '</div>' : '') +
+    '<div class="gap-toggle">' +
     '<button id="rv-ok" class="sel-open">Looks good</button>' +
-    '<button id="rv-skip">Skip</button>' +
-    '<button id="rv-stop" aria-label="Stop checking">&times;</button>' +
+    '<button id="rv-skip">Next</button>' +
     '</div>';
   const wbtn = $('#rv-widen');
   if (wbtn) wbtn.onclick = () => {
@@ -725,6 +726,15 @@ function widenFeature(fid) {
   let grown;
   try { grown = turf.buffer(f, 15, { units: 'meters', steps: 8 }); }
   catch (e) { toast('Could not widen this piece.'); return; }
+  // never widen across a road (Toby, 3 Sep: Jacobs Canyon Rd case)
+  try {
+    const roads = (regionData[currentRegion].roads || { features: [] }).features;
+    for (const rd of roads) {
+      if (!turf.booleanIntersects(grown, rd)) continue;
+      const cut = turf.difference(turf.featureCollection([grown, turf.buffer(rd, 6, { units: 'meters' })]));
+      if (cut) grown = cut;
+    }
+  } catch (e) { /* roads unavailable — widen as-is */ }
   f.properties._origGeom = f.geometry;
   f.properties._origEnforce = f.properties.enforce;
   f.geometry = grown.geometry;
