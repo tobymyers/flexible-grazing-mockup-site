@@ -1,1 +1,1 @@
-{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":"pad-b1","kind":"paddock","name":"Shore creek paddock","acres":849.7,"editable":true,"source":"hand-drawn (pipeline heuristic)"},"geometry":{"type":"Polygon","coordinates":[[[-111.405795,42.040775],[-111.409463,42.030867],[-111.444555,42.038081],[-111.440892,42.047989],[-111.405795,42.040775]]]}}]}
+{"type":"FeatureCollection","features":[]}

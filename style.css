@@ -4,8 +4,8 @@
   --bg-solid: #191b13;
   --ink: #f2f3ee;
   --muted: #b9bdb0;
-  --mint: #43d9a3;
-  --mint-dark: #2fbf8b;
+  --mint: #d9a03a;
+  --mint-dark: #b8862e;
   --radius: 22px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
@@ -218,3 +218,42 @@ body {
 }
 .review-bar { margin-top: 10px; border-top: 1px solid rgba(255,255,255,.15); padding-top: 8px; }
 .review-bar .rv-note { font-size: 12px; opacity: .8; margin: 0 0 8px; }
+
+
+/* First-visit walkthrough */
+#intro[hidden] { display: none; }
+#intro {
+  position: fixed; inset: 0; z-index: 60; background: rgba(8, 10, 8, 0.55);
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 0 12px calc(96px + var(--safe-b));
+}
+#intro-card {
+  width: min(440px, 100%); background: var(--bg-solid); border-radius: var(--radius);
+  padding: 18px 20px; box-shadow: 0 8px 40px rgba(0,0,0,.6);
+}
+#intro-card h2 { margin: 4px 0 8px; font-size: 20px; }
+#intro-card p { margin: 0 0 6px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+#intro-card p#intro-step-label { font-size: 12px; color: var(--mint); font-weight: 700; }
+#intro .eb-row { display: flex; gap: 8px; margin-top: 14px; }
+#intro button {
+  flex: 1; min-height: 52px; border: none; border-radius: 14px;
+  font-size: 15px; font-weight: 600; color: var(--ink); background: rgba(255,255,255,.1);
+}
+#intro button.eb-save { background: #2979ff; }
+
+/* My areas list */
+.area-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; text-align: left; background: transparent; border: none; color: var(--ink);
+  padding: 13px 4px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.area-row small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.area-row .area-badge {
+  flex: none; font-size: 11.5px; font-weight: 700; padding: 4px 9px; border-radius: 999px;
+  background: rgba(217, 160, 58, 0.18); color: var(--mint);
+}
+.areas-empty { color: var(--muted); font-size: 14px; line-height: 1.5; padding: 10px 2px 4px; }
+
+/* Collapsible data details on cards */
+.data-details summary { color: var(--muted); font-size: 13px; cursor: pointer; margin-top: 8px; }
+.data-details p { font-size: 12px; }

@@ -1,1 +1,1 @@
-{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":"pad-a1","kind":"paddock","name":"Creek paddock","acres":604.8,"editable":true,"source":"hand-drawn (pipeline heuristic)"},"geometry":{"type":"Polygon","coordinates":[[[-108.608822,42.739623],[-108.623114,42.738356],[-108.626145,42.75691],[-108.611849,42.758178],[-108.608822,42.739623]]]}}]}
+{"type":"FeatureCollection","features":[]}

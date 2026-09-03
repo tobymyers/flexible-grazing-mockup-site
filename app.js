@@ -232,10 +232,7 @@ function addSourcesAndLayers() {
   map.addLayer({
     id: 'allotments-label', type: 'symbol', source: 'allotments',
     layout: {
-      'text-field': ['format',
-        ['get', 'name'], {},
-        '\n', {},
-        ['get', 'source'], { 'font-scale': 0.72 }],
+      'text-field': ['get', 'name'],
       'text-font': firstSymbolFont(),
       'text-size': 13,
       'symbol-placement': 'point'
@@ -270,6 +267,16 @@ function addSourcesAndLayers() {
     id: 'exclusion-line-narrow', type: 'line', source: 'exclusion',
     filter: ['==', ['get', 'enforce'], 'narrow'],
     paint: { 'line-color': '#7fb8d8', 'line-width': 1.5, 'line-dasharray': [1.5, 1.5] }
+  });
+  map.addLayer({
+    id: 'exclusion-line-established', type: 'line', source: 'exclusion',
+    filter: ['==', ['get', 'established'], '2026'],
+    paint: { 'line-color': '#d9a03a', 'line-width': 3 }
+  });
+  map.addSource('review-highlight', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'review-highlight-line', type: 'line', source: 'review-highlight',
+    paint: { 'line-color': '#ffffff', 'line-width': 4, 'line-opacity': 0.9, 'line-dasharray': [1.2, 1] }
   });
   map.addLayer({
     id: 'exclusion-line-toosmall', type: 'line', source: 'exclusion',
@@ -332,30 +339,6 @@ function addSourcesAndLayers() {
     'text-halo-color': 'rgba(0,0,0,0.85)',
     'text-halo-width': 1.3
   };
-  map.addLayer({
-    id: 'exclusion-source-label', type: 'symbol', source: 'exclusion',
-    minzoom: 11.5,
-    layout: {
-      'text-field': ['get', 'source'],
-      'text-font': firstSymbolFont(),
-      'text-size': 10,
-      'symbol-placement': 'point',
-      'text-allow-overlap': false
-    },
-    paint: srcLabelPaint
-  });
-  map.addLayer({
-    id: 'paddock-source-label', type: 'symbol', source: 'paddock',
-    minzoom: 11,
-    layout: {
-      'text-field': ['concat', 'Paddock — ', ['get', 'source']],
-      'text-font': firstSymbolFont(),
-      'text-size': 10,
-      'symbol-placement': 'line',
-      'text-offset': [0, 1]
-    },
-    paint: { ...srcLabelPaint, 'text-color': '#f6f0b8' }
-  });
   map.addLayer({
     id: 'ownership-source-label', type: 'symbol', source: 'ownership',
     minzoom: 11,
@@ -461,8 +444,7 @@ function showHintCard() {
     }
   } catch (e) {}
   $('#card-body').innerHTML =
-    '<p class="card-kicker">Now</p>' +
-    '<p class="card-main">Cows stay out of the shaded blue areas. Tap a water drop to open or close a water gap.</p>' +
+    '<p class="card-main">Cows stay out of the shaded blue areas. Tap anything on the map to learn about it.</p>' +
     reviewBtn;
   const rb = $('#review-btn');
   if (rb) rb.onclick = startReview;
@@ -508,25 +490,29 @@ function showExclusionCard(props) {
       'boundary is at least 30 m across &mdash; wide enough for collars to hold.</p>' +
       '<div class="gap-toggle"><button id="ex-unwiden-btn">Undo widening</button></div>';
   }
+  const isGuard = !!props.spring_guard;
+  const est = props.established === '2026';
+  const estBtn = (!narrowNote && ['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard)
+    ? (est
+      ? '<p class="card-sub" style="color:#d9a03a"><b>Established for the 2026 season.</b></p>' +
+        '<div class="gap-toggle"><button id="ex-unest-btn">Un-mark</button></div>'
+      : '<div class="gap-toggle"><button id="ex-est-btn" class="sel-open">Mark established for 2026</button></div>')
+    : '';
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
-    '<p class="card-kicker">Exclusion zone</p>' +
+    `<p class="card-kicker">${isGuard ? 'Spring guard' : 'Exclusion zone'}</p>` +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${acres ? ' &middot; ' + acres + ' acres' : ''}</p>` +
-    '<p class="card-sub" style="font-size:12px;line-height:1.5">' +
-    '<b>Selection rule (V3)</b> (per mesic valley-bottom segment): ' +
-    'mean late-season NDVI &ge; 0.3 in &ge; 5 of the last 10 years (2016&ndash;2025, Landsat 30 m) ' +
-    'AND IrrMapper irrigation frequency &lt; 0.2. Green-but-irrigated segments render as dotted ghosts. ' +
-    'No stream-type, slope, or area gates; segments deduped on geometry WKB.<br>' +
-    '<b>Inputs</b>: Mesic Analysis Platform valley-bottom segments (30 m Landsat, 1984&ndash;2025 late-season NDVI persistence) ' +
-    '&cup; NWI riparian + wetland supplement &cup; USGS 3DHP hydrography.<br>' +
-    '<b>Post-processing</b> (EPSG:6341): dissolve &rarr; morphological closing &plusmn;20 m &rarr; simplify 5 m ' +
-    '&rarr; drop holes &lt; 1 ac &rarr; subtract road corridors (TIGER/UGRC centerlines, 5 m half-width) at crossings.' +
-    (attrs.length ? '<br><b>This polygon</b>: ' + attrs.join('; ') + '.' : '') +
-    '</p>' + narrowNote +
-    (props.source ? `<p class="card-sub" style="opacity:.7">Source tag: ${esc(props.source)}</p>` : '') +
-    (regionData[currentRegion].editSavedAt
-      ? `<p class="card-sub" style="opacity:.7">Your saved 2026 riparian area (edited ${new Date(regionData[currentRegion].editSavedAt).toLocaleDateString()}).</p>`
-      : '') +
+    (isGuard
+      ? '<p class="card-sub">A ready-made circle around a mapped spring, sized so collars can hold it. ' +
+        'If this spring is not real any more, remove it.</p>' +
+        '<div class="gap-toggle"><button id="ex-guard-off">Remove this guard</button></div>'
+      : '<p class="card-sub">This spot stays green late into the summer, year after year. Keeping cows out protects the water and the banks.</p>') +
+    '<details class="data-details"><summary>Where this comes from</summary>' +
+    '<p class="card-sub">Drawn from 40 years of satellite pictures: a spot counts when it was green in at least 5 of the last 10 summers and is not irrigated farm ground. ' +
+    'Data: Univ. of Montana mesic maps, USGS water maps, IrrMapper irrigation maps.' +
+    (attrs.length ? '<br>This piece: ' + attrs.join('; ') + '.' : '') +
+    (props.source ? '<br>Source tag: ' + esc(props.source) : '') + '</p></details>' +
+    narrowNote + estBtn +
     '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
   $('.card-close').onclick = showHintCard;
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
@@ -538,6 +524,33 @@ function showExclusionCard(props) {
   if (pbtn) pbtn.onclick = () => setEnforce(props.id, 'included', 'Added to the keep-out area.');
   const dbtn = $('#ex-demote-btn');
   if (dbtn) dbtn.onclick = () => setEnforce(props.id, 'irrigated', 'Back to watered-ground status.');
+  const gbtn = $('#ex-guard-off');
+  if (gbtn) gbtn.onclick = () => removeSpringGuard(props.id);
+  const ebtn = $('#ex-est-btn');
+  if (ebtn) ebtn.onclick = () => setEstablished(props.id, '2026', 'Established for the 2026 season.');
+  const ubtn2 = $('#ex-unest-btn');
+  if (ubtn2) ubtn2.onclick = () => setEstablished(props.id, null, 'Un-marked.');
+}
+
+function setEstablished(fid, val, msg) {
+  const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
+  if (!f) return;
+  if (val) f.properties.established = val; else delete f.properties.established;
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showExclusionCard(f.properties);
+  toast(msg);
+}
+
+function removeSpringGuard(fid) {
+  const feats = regionData[currentRegion].exclusion.features;
+  const i = feats.findIndex(x => x.properties.id === fid);
+  if (i < 0) return;
+  feats.splice(i, 1);
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showHintCard();
+  toast('Spring guard removed.');
 }
 
 // Flip a feature between ghost and included (no geometry change), persisted
@@ -642,9 +655,14 @@ function startReview() {
   goReviewItem();
 }
 
+function clearReviewHighlight() {
+  try { map.getSource('review-highlight').setData({ type: 'FeatureCollection', features: [] }); } catch (e) {}
+}
+
 function goReviewItem() {
   if (reviewIdx >= reviewList.length) {
     toast('All checked. Nice work.');
+    clearReviewHighlight();
     showHintCard();
     return;
   }
@@ -652,12 +670,14 @@ function goReviewItem() {
   const f = item.f;
   const p = f.properties;
   try {
+    map.getSource('review-highlight').setData({ type: 'FeatureCollection', features: [f] });
     const bb = turf.bbox(f);
     map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 17, duration: 900 });
   } catch (e) {}
   // Compact card on purpose: the point is to LOOK at the map, not read.
   // Tap the zone itself for the full technical card.
-  const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>' : '';
+  const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>'
+    : (p.enforce === 'irrigated') ? '<button id="rv-widen">Add it</button>' : '';
   $('#card-body').innerHTML =
     `<p class="card-kicker">Check ${reviewIdx + 1} of ${reviewList.length}</p>` +
     `<p class="card-sub" style="margin-top:2px">${item.reason}</p>` +
@@ -667,7 +687,11 @@ function goReviewItem() {
     '<button id="rv-stop" aria-label="Stop checking">&times;</button>' +
     '</div>';
   const wbtn = $('#rv-widen');
-  if (wbtn) wbtn.onclick = () => { widenFeature(p.id); goReviewItem(); };
+  if (wbtn) wbtn.onclick = () => {
+    if (p.enforce === 'irrigated') setEnforce(p.id, 'included', 'Added to the keep-out area.');
+    else widenFeature(p.id);
+    goReviewItem();
+  };
   $('#rv-ok').onclick = () => {
     try {
       const done = reviewedIds(currentRegion);
@@ -678,7 +702,7 @@ function goReviewItem() {
     goReviewItem();
   };
   $('#rv-skip').onclick = () => { reviewIdx += 1; goReviewItem(); };
-  $('#rv-stop').onclick = showHintCard;
+  $('#rv-stop').onclick = () => { clearReviewHighlight(); showHintCard(); };
 }
 
 function persistSeasonEdit(region) {
@@ -1164,6 +1188,7 @@ let scrimEl = null;
 function closeSheets() {
   $('#layer-sheet').hidden = true;
   $('#region-menu').hidden = true;
+  $('#areas-sheet').hidden = true;
   if (scrimEl) { scrimEl.remove(); scrimEl = null; }
 }
 function openSheet(el) {
@@ -1176,9 +1201,8 @@ function openSheet(el) {
 }
 
 const LAYER_GROUPS = {
-  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-source-label'],
+  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons'],
-  paddock: ['paddock-glow', 'paddock-line', 'paddock-source-label'],
   allotments: ['allotments-line', 'allotments-label'],
   ownership: ['ownership-fill', 'ownership-source-label'],
   springs: ['springs-dot', 'springs-source-label']
@@ -1196,8 +1220,6 @@ function wireUI() {
     try { geolocate.trigger(); }
     catch (e) { toast('Your location is not available on this device.'); }
   };
-  $('#btn-search').onclick = () => toast('Search is not in this demo.');
-  $('#btn-bell').onclick = () => toast('Alerts are not in this demo.');
   $('#fab-add').onclick = () => {
     if (placingGap) { cancelGapPlacement(); return; }
     enterGapPlacement();
@@ -1218,23 +1240,86 @@ function wireUI() {
 
   document.querySelectorAll('.nav-item').forEach(btn => {
     btn.onclick = () => {
-      if (btn.dataset.tab !== 'live') {
-        toast('This demo only shows the map.');
-        return;
-      }
       document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      if (btn.dataset.tab === 'areas') openAreasSheet();
+      else closeSheets();
     };
   });
 
-  // one-time WiFi note
+  // first-visit walkthrough (3 short steps)
+  wireIntro();
+}
+
+const INTRO_STEPS = [
+  { title: 'The blue areas are creek bottoms',
+    body: 'Forty years of satellite pictures show these places stay green late into summer. Cows camp there and wear down the banks, so the collars keep them out.' },
+  { title: 'You know this land better than a satellite',
+    body: 'Tap any area to see why it is there. Dotted areas are questions, not rules — watered hay ground and tiny wet spots. Tap one to decide.' },
+  { title: 'Fix it with your finger',
+    body: 'Tap an area, then "Adjust boundary" to paint it bigger or smaller. Tap + to add a water gap where cows should drink. Tip: pan the map on WiFi first so it works out of service.' }
+];
+let introIdx = 0;
+
+function wireIntro() {
   let seen = false;
-  try { seen = localStorage.getItem('wifiNoteSeen') === '1'; } catch (e) {}
-  if (!seen) $('#wifi-note').hidden = false;
-  $('#wifi-ok').onclick = () => {
-    $('#wifi-note').hidden = true;
-    try { localStorage.setItem('wifiNoteSeen', '1'); } catch (e) {}
+  try { seen = localStorage.getItem('introSeen') === '1'; } catch (e) {}
+  if (seen) return;
+  const show = () => {
+    const st = INTRO_STEPS[introIdx];
+    $('#intro-step-label').textContent = (introIdx + 1) + ' of ' + INTRO_STEPS.length;
+    $('#intro-title').textContent = st.title;
+    $('#intro-body').textContent = st.body;
+    $('#intro-next').textContent = introIdx === INTRO_STEPS.length - 1 ? 'Got it' : 'Next';
   };
+  const done = () => {
+    $('#intro').hidden = true;
+    try { localStorage.setItem('introSeen', '1'); } catch (e) {}
+  };
+  $('#intro').hidden = false;
+  show();
+  $('#intro-next').onclick = () => {
+    introIdx += 1;
+    if (introIdx >= INTRO_STEPS.length) done(); else show();
+  };
+  $('#intro-skip').onclick = done;
+}
+
+function openAreasSheet() {
+  const list = $('#areas-list');
+  const feats = regionData[currentRegion] ? regionData[currentRegion].exclusion.features : [];
+  const mine = feats.filter(f =>
+    f.properties.established === '2026' ||
+    f.properties.enforce === 'included' ||
+    f.properties.enforce === 'widened');
+  if (!mine.length) {
+    list.innerHTML = '<p class="areas-empty">Nothing saved yet. Tap an exclusion zone on the map and choose ' +
+      '"Mark established for 2026" — it will show up here with a gold outline on the map.</p>';
+  } else {
+    list.innerHTML = mine.map(f => {
+      const p = f.properties;
+      const what = p.established === '2026' ? 'Established 2026'
+        : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
+      const ac = p.acres != null ? Math.round(p.acres).toLocaleString() + ' acres' : '';
+      return `<button class="area-row" data-fid="${esc(p.id)}">` +
+        `<span>${esc(p.name || 'Area')}<small>${ac}</small></span>` +
+        `<span class="area-badge">${what}</span></button>`;
+    }).join('');
+    list.querySelectorAll('.area-row').forEach(btn => {
+      btn.onclick = () => {
+        const f = feats.find(x => x.properties.id === btn.dataset.fid);
+        closeSheets();
+        document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.tab === 'map'));
+        if (!f) return;
+        try {
+          const bb = turf.bbox(f);
+          map.fitBounds([[bb[0], bb[1]], [bb[2], bb[3]]], { padding: 90, maxZoom: 16.5, duration: 800 });
+        } catch (e) {}
+        showExclusionCard(f.properties);
+      };
+    });
+  }
+  openSheet($('#areas-sheet'));
 }
 
 // Camera for a region: fit the paddock (or exclusion) bounds from the data

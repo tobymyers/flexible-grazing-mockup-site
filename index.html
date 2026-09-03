@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-<meta name="theme-color" content="#15170f">
+<meta name="theme-color" content="#14150f">
 <title>Range Map</title>
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2315170f'/%3E%3Cpath d='M32 12c8 10 14 17 14 25a14 14 0 1 1-28 0c0-8 6-15 14-25z' fill='%234da3ff'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314150f'/%3E%3Cpath d='M32 12c8 10 14 17 14 25a14 14 0 1 1-28 0c0-8 6-15 14-25z' fill='%234da3ff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -14,7 +14,7 @@
 
 <div id="map"></div>
 
-<!-- Top-left round buttons (Halter style) -->
+<!-- Left round buttons -->
 <div class="fab-col left">
   <button class="round-btn" id="btn-home" aria-label="Go back to the whole ranch view">
     <svg viewBox="0 0 24 24"><path d="M4 11.5 12 4l8 7.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg>
@@ -24,16 +24,6 @@
   </button>
   <button class="round-btn" id="btn-layers" aria-label="Choose what shows on the map">
     <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m4.6 12.6 7.4 4.1 7.4-4.1L21 14l-9 5-9-5z"/></svg>
-  </button>
-</div>
-
-<!-- Top-right round buttons (decorative, like the real app) -->
-<div class="fab-col right">
-  <button class="round-btn" id="btn-search" aria-label="Search">
-    <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="m15.5 15.5 5 5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-  </button>
-  <button class="round-btn" id="btn-bell" aria-label="Alerts">
-    <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v3.5L4.5 16h15L18 12.5V9a6 6 0 0 0-6-6z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
   </button>
 </div>
 
@@ -48,18 +38,22 @@
   <button class="menu-item" data-region="bear-lake">Bear Lake <small>Utah / Idaho line</small></button>
 </div>
 
-<!-- WiFi precache note (shows once) -->
-<div id="wifi-note" class="note" hidden>
-  <p><strong>Before you drive out:</strong> open this app on WiFi. Move and zoom the map around your ranch. That saves the map pictures on your phone, so they still show where there is no signal.</p>
-  <button id="wifi-ok">Got it</button>
+<!-- First-visit walkthrough -->
+<div id="intro" hidden>
+  <div id="intro-card">
+    <p id="intro-step-label">1 of 3</p>
+    <h2 id="intro-title"></h2>
+    <p id="intro-body"></p>
+    <div class="eb-row">
+      <button id="intro-skip">Skip</button>
+      <button id="intro-next" class="eb-save">Next</button>
+    </div>
+  </div>
 </div>
 
 <!-- Bottom info card (hint / feature details) -->
 <div id="card" class="card">
-  <div id="card-body">
-    <p class="card-kicker">Now</p>
-    <p class="card-main">Cows stay out of the shaded blue areas. Tap a water drop to open or close a water gap.</p>
-  </div>
+  <div id="card-body"></div>
 </div>
 
 <!-- Boundary edit bar (highlighter & eraser mode) -->
@@ -79,8 +73,8 @@
   </div>
 </div>
 
-<!-- Green plus button -->
-<button id="fab-add" aria-label="Add">
+<!-- Add water gap button -->
+<button id="fab-add" aria-label="Add a water gap">
   <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>
 </button>
 
@@ -90,30 +84,28 @@
   <h2>What shows on the map</h2>
   <label class="switch-row"><span>Exclusion zones</span><input type="checkbox" data-layer="exclusion" checked></label>
   <label class="switch-row"><span>Water gaps <small>drink spots</small></span><input type="checkbox" data-layer="water_gaps" checked></label>
-  <label class="switch-row"><span>Paddock line</span><input type="checkbox" data-layer="paddock" checked></label>
   <label class="switch-row"><span>Allotments <small>BLM grazing areas</small></span><input type="checkbox" data-layer="allotments" checked></label>
   <label class="switch-row"><span>Who owns the land</span><input type="checkbox" data-layer="ownership"></label>
   <label class="switch-row"><span>Springs</span><input type="checkbox" data-layer="springs" checked></label>
   <p class="sheet-note">Tip: pan the map on WiFi first, so it works out of service.</p>
 </div>
 
-<!-- Bottom nav -->
+<!-- My areas sheet -->
+<div id="areas-sheet" class="sheet" hidden>
+  <div class="sheet-grab"></div>
+  <h2>My riparian areas</h2>
+  <div id="areas-list"></div>
+</div>
+
+<!-- Bottom nav: two real tabs -->
 <nav id="bottom-nav">
-  <button class="nav-item active" data-tab="live">
+  <button class="nav-item active" data-tab="map">
     <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5z"/></svg>
-    <span>Live</span>
+    <span>Map</span>
   </button>
-  <button class="nav-item" data-tab="herd">
-    <svg viewBox="0 0 24 24"><path d="M4 6c0 2 1.5 3.5 3 4l-1 8c0 2 2 3 3 3h6c1 0 3-1 3-3l-1-8c1.5-.5 3-2 3-4h-4c-1 1.2-2.3 2-4 2s-3-.8-4-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="9.5" cy="14" r="1"/><circle cx="14.5" cy="14" r="1"/></svg>
-    <span>Herd</span>
-  </button>
-  <button class="nav-item" data-tab="grazing">
-    <svg viewBox="0 0 24 24"><path d="M12 3l3 1.7v3.4L12 9.8 9 8.1V4.7zM6 9.5l3 1.7v3.4l-3 1.7-3-1.7v-3.4zm12 0 3 1.7v3.4l-3 1.7-3-1.7v-3.4zM12 16l3 1.7v3.4L12 22l-3-1.7v-3.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
-    <span>Grazing</span>
-  </button>
-  <button class="nav-item" data-tab="more">
-    <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-    <span>More</span>
+  <button class="nav-item" data-tab="areas">
+    <svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    <span>My areas</span>
   </button>
 </nav>
 
