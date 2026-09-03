@@ -20,13 +20,13 @@ const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'owners
 
 const REGIONS = {
   'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
-                  detail: { center: [-108.628, 42.667], zoom: 14.8 } },
+                  detail: { center: [-108.628, 42.667], zoom: 15.4 } },
   'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
-                  detail: { center: [-111.392, 42.124], zoom: 14.5 } },
+                  detail: { center: [-111.392, 42.124], zoom: 15.1 } },
   'holland':    { label: 'Big Hole (Holland)', center: [-113.03, 45.29], zoom: 11.6,
-                  detail: { center: [-112.985, 45.225], zoom: 14.2 } },
+                  detail: { center: [-112.985, 45.225], zoom: 14.8 } },
   'martinell':  { label: 'Centennial (Martinell)', center: [-111.82, 44.71], zoom: 12.0,
-                  detail: { center: [-111.79, 44.72], zoom: 13.8 } }
+                  detail: { center: [-111.79, 44.72], zoom: 14.5 } }
 };
 
 const GAP_HALF_M = 15; // half of the 30 m gap width, for point→square seals
@@ -149,16 +149,23 @@ function buildGapCollections(region) {
       center: polygonCentroid(q.geometry), sealGeom: q.geometry
     });
   }
-  const points = [], seals = [];
+  const points = [], seals = [], toes = [];
   for (const g of gaps) {
     const open = state[g.id] !== false;
     const props = { id: g.id, name: g.name || 'Water gap', width_m: g.width_m, open };
+    const src = raw.find(x => x.properties.id === g.id);
+    if (src) { props.lane_ft = src.properties.lane_ft; props.lane_to = src.properties.lane_to; }
     points.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: g.center } });
     seals.push({ type: 'Feature', properties: props, geometry: g.sealGeom });
+    // the far-end handle shows while placing or when the gap's card is open
+    if (props.lane_to && (g.id === 'user-pending' || g.id === selectedGapId)) {
+      toes.push({ type: 'Feature', properties: { id: g.id }, geometry: { type: 'Point', coordinates: props.lane_to } });
+    }
   }
   return {
     points: { type: 'FeatureCollection', features: points },
-    seals: { type: 'FeatureCollection', features: seals }
+    seals: { type: 'FeatureCollection', features: seals },
+    toes: { type: 'FeatureCollection', features: toes }
   };
 }
 
@@ -210,6 +217,7 @@ function addSourcesAndLayers() {
   map.addSource('exclusion', { type: 'geojson', data: d.exclusion });
   map.addSource('gap-seals', { type: 'geojson', data: gaps.seals });
   map.addSource('gap-points', { type: 'geojson', data: gaps.points });
+  map.addSource('gap-toes', { type: 'geojson', data: gaps.toes });
   map.addSource('paddock', { type: 'geojson', data: d.paddock });
   map.addSource('springs', { type: 'geojson', data: d.springs });
 
@@ -388,6 +396,17 @@ function addSourcesAndLayers() {
     }
   });
 
+  // Far-end lane handle: a white square you drag to the real water.
+  map.addLayer({
+    id: 'gap-toe-handle', type: 'circle', source: 'gap-toes',
+    paint: {
+      'circle-radius': 9,
+      'circle-color': '#ffffff',
+      'circle-stroke-color': '#2979ff',
+      'circle-stroke-width': 3
+    }
+  });
+
   // Droplet markers on top.
   map.addLayer({
     id: 'gap-icons', type: 'symbol', source: 'gap-points',
@@ -434,6 +453,7 @@ function refreshRegionSources() {
   map.getSource('exclusion').setData(displayedExclusionFC(currentRegion));
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
+  map.getSource('gap-toes').setData(gaps.toes);
   map.getSource('paddock').setData(d.paddock);
   map.getSource('springs').setData(d.springs);
 }
@@ -442,6 +462,7 @@ function refreshGapSources() {
   const gaps = buildGapCollections(currentRegion);
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
+  map.getSource('gap-toes').setData(gaps.toes);
   map.getSource('exclusion').setData(displayedExclusionFC(currentRegion));
 }
 
@@ -462,6 +483,7 @@ function toast(msg, ms) {
 // app; cards only exist while something is tapped. "showHintCard" now means
 // "return to rest" — every existing caller keeps working.
 function showHintCard() {
+  if (selectedGapId) { selectedGapId = null; try { refreshGapSources(); } catch (e) {} }
   const c = $('#card');
   if (c) c.hidden = true;
   $('#card-body').innerHTML = '';
@@ -823,6 +845,8 @@ function unwidenFeature(fid) {
 
 function showGapCard(props) {
   revealCard();
+  selectedGapId = String(props.id).startsWith('user-') ? props.id : null;
+  refreshGapSources();
   const open = gapOpenState[currentRegion][props.id] !== false;
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
@@ -891,6 +915,7 @@ function setGap(props, open) {
 
 let placingGap = false;
 let editSelectMode = false;
+let selectedGapId = null;
 let pendingGapCenter = null;
 let userGapCounter = 0;
 
@@ -928,7 +953,23 @@ function snapToBoundary(pointPx, tolPx) {
 // the fence line to the nearest mapped water line, stopping at the channel.
 // If water is farther than ~155 m (500 ft) or unmapped, fall back to the
 // classic 30 m square notch.
-function buildGapPlugGeometry(center) {
+// Square-cornered 30 m wide rectangle from the fence point to the water end.
+function laneRect(center, to) {
+  const A = turf.point(center);
+  const B = turf.point(to);
+  const brg = turf.bearing(A, B);
+  const km = 0.015; // 15 m half-width
+  const c1 = turf.destination(A, km, brg - 90).geometry.coordinates;
+  const c2 = turf.destination(A, km, brg + 90).geometry.coordinates;
+  const c3 = turf.destination(B, km, brg + 90).geometry.coordinates;
+  const c4 = turf.destination(B, km, brg - 90).geometry.coordinates;
+  return { type: 'Polygon', coordinates: [[c1, c2, c3, c4, c1]] };
+}
+
+// Best guess for where the lane should end: nearest mapped water line. The
+// guess can be wrong (flowlines drift from the visible channel), so the far
+// end is a draggable handle the rancher pulls to the real water.
+function guessWaterTo(center) {
   const water = (regionData[currentRegion].water || { features: [] }).features;
   let best = null, bestKm = 0.155;
   const from = turf.point(center);
@@ -938,22 +979,19 @@ function buildGapPlugGeometry(center) {
       if (np.properties.dist < bestKm) { bestKm = np.properties.dist; best = np; }
     } catch (e) {}
   }
-  if (!best || bestKm < 0.01) {
-    return { geom: squareAround(center[0], center[1], GAP_HALF_M), laneFt: null };
+  if (!best || bestKm < 0.01) return null;
+  return best.geometry.coordinates;
+}
+
+function buildGapPlugGeometry(center, to) {
+  if (to === undefined) to = guessWaterTo(center);
+  if (!to) {
+    return { geom: squareAround(center[0], center[1], GAP_HALF_M), laneFt: null, to: null };
   }
-  // square-cornered lane (Toby prefers square edges): a 30 m wide rectangle
-  // from the fence point to the water point
-  const A = turf.point(center);
-  const B = turf.point(best.geometry.coordinates);
-  const brg = turf.bearing(A, B);
-  const km = 0.015; // 15 m half-width
-  const c1 = turf.destination(A, km, brg - 90).geometry.coordinates;
-  const c2 = turf.destination(A, km, brg + 90).geometry.coordinates;
-  const c3 = turf.destination(B, km, brg + 90).geometry.coordinates;
-  const c4 = turf.destination(B, km, brg - 90).geometry.coordinates;
   return {
-    geom: { type: 'Polygon', coordinates: [[c1, c2, c3, c4, c1]] },
-    laneFt: Math.round(bestKm * 3280.84)
+    geom: laneRect(center, to),
+    laneFt: Math.round(turf.distance(turf.point(center), turf.point(to), { units: 'kilometers' }) * 3280.84),
+    to
   };
 }
 
@@ -972,7 +1010,7 @@ function showPlacementCard() {
     `<p class="card-main">${has
       ? (lane ? 'A ' + lane + ' ft lane down to the water.' : 'A 100 ft opening in the line.')
       : 'Tap the fence line where cows should walk in.'}</p>` +
-    (has ? '<p class="card-sub">Drag the drop, or tap another spot on the line, to move it.</p>' : '') +
+    (has ? '<p class="card-sub">Drag the drop to move it. If the lane stops short, pull the white handle to the water.</p>' : '') +
     '<div class="gap-toggle">' +
     (has ? '<button id="gap-done-btn" class="sel-open">Place gap</button>' : '') +
     '<button id="gap-cancel-btn">Cancel</button>' +
@@ -993,7 +1031,9 @@ function enterGapPlacement() {
 function upsertPendingGap(center) {
   pendingGapCenter = center;
   const feats = regionData[currentRegion].water_gaps.features;
-  const plugInfo = buildGapPlugGeometry(center);
+  const prev = pendingFeature();
+  const keepTo = prev && prev.properties.lane_custom ? prev.properties.lane_to : undefined;
+  const plugInfo = buildGapPlugGeometry(center, keepTo);
   let f = pendingFeature();
   if (!f) {
     f = {
@@ -1007,6 +1047,7 @@ function upsertPendingGap(center) {
     f.geometry.coordinates = center;
   }
   f.properties.lane_ft = plugInfo.laneFt;
+  f.properties.lane_to = plugInfo.to || null;
   let plug = feats.find(x => x.properties.id === 'user-pending-plug');
   if (!plug) {
     plug = { type: 'Feature', properties: { id: 'user-pending-plug', name: 'My water gap', width_m: 30, open: true, source: 'placed by you' }, geometry: plugInfo.geom };
@@ -1106,8 +1147,10 @@ function wireGapDragging() {
       x => x.properties.id === draggingGapId);
     if (feat) {
       feat.geometry.coordinates = [snapped.lng, snapped.lat];
-      const plugInfo = buildGapPlugGeometry([snapped.lng, snapped.lat]);
+      const keepTo = feat.properties.lane_custom ? feat.properties.lane_to : undefined;
+      const plugInfo = buildGapPlugGeometry([snapped.lng, snapped.lat], keepTo);
       feat.properties.lane_ft = plugInfo.laneFt;
+      feat.properties.lane_to = plugInfo.to || null;
       const plug = regionData[currentRegion].water_gaps.features.find(
         x => x.properties.id === draggingGapId + '-plug');
       if (plug) plug.geometry = plugInfo.geom;
@@ -1122,6 +1165,48 @@ function wireGapDragging() {
     saveUserGaps(currentRegion);
     toast('Water gap moved.');
   };
+  // far-end handle drag: aim and stretch the lane to the real water
+  let draggingToeId = null;
+  const toeStart = (e) => {
+    if (editMode) return;
+    const f = e.features && e.features[0];
+    if (!f) return;
+    e.preventDefault();
+    draggingToeId = f.properties.id;
+    map.dragPan.disable();
+    map.getCanvas().style.cursor = 'grabbing';
+  };
+  const toeMove = (e) => {
+    if (!draggingToeId) return;
+    const feat = regionData[currentRegion].water_gaps.features.find(
+      x => x.properties.id === draggingToeId);
+    if (!feat) return;
+    const to = [e.lngLat.lng, e.lngLat.lat];
+    feat.properties.lane_to = to;
+    feat.properties.lane_custom = true;
+    feat.properties.lane_ft = Math.round(turf.distance(
+      turf.point(feat.geometry.coordinates), turf.point(to), { units: 'kilometers' }) * 3280.84);
+    const plug = regionData[currentRegion].water_gaps.features.find(
+      x => x.properties.id === draggingToeId + '-plug');
+    if (plug) plug.geometry = laneRect(feat.geometry.coordinates, to);
+    refreshGapSources();
+  };
+  const toeEnd = () => {
+    if (!draggingToeId) return;
+    const wasPending = draggingToeId === 'user-pending';
+    draggingToeId = null;
+    map.dragPan.enable();
+    map.getCanvas().style.cursor = '';
+    if (!wasPending) saveUserGaps(currentRegion);
+    toast('Lane adjusted.');
+  };
+  map.on('mousedown', 'gap-toe-handle', toeStart);
+  map.on('touchstart', 'gap-toe-handle', toeStart);
+  map.on('mousemove', toeMove);
+  map.on('touchmove', toeMove);
+  map.on('mouseup', toeEnd);
+  map.on('touchend', toeEnd);
+
   map.on('mousedown', 'gap-icons', start);
   map.on('touchstart', 'gap-icons', start);
   map.on('mousemove', move);
@@ -1482,7 +1567,6 @@ function wireIntro() {
   const done = () => {
     $('#intro').hidden = true;
     try { localStorage.setItem('introSeen', '1'); } catch (e) {}
-    toast('Tap any blue area to start.', 4000);
   };
   $('#intro').hidden = false;
   show();
