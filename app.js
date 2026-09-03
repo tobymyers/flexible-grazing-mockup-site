@@ -331,7 +331,7 @@ function addSourcesAndLayers() {
   map.addLayer({
     id: 'brush-stroke-line', type: 'line', source: 'brush-stroke',
     layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: { 'line-color': '#4caf87', 'line-width': BRUSH_RADIUS_PX * 2, 'line-opacity': 0.35 }
+    paint: { 'line-color': '#5aa9e8', 'line-width': BRUSH_RADIUS_PX * 2, 'line-opacity': 0.35 }
   });
 
   // Data-source labels: every feature says where its data really came from
@@ -1118,7 +1118,7 @@ function setEditMode(mode) {
   editMode = mode;
   $('#eb-add').classList.toggle('sel', mode === 'add');
   $('#eb-erase').classList.toggle('sel', mode === 'erase');
-  map.setPaintProperty('brush-stroke-line', 'line-color', mode === 'add' ? '#4caf87' : '#e08a4a');
+  map.setPaintProperty('brush-stroke-line', 'line-color', mode === 'add' ? '#5aa9e8' : '#e8e4da');
 }
 
 function enterBoundaryEdit() {

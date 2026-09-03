@@ -158,8 +158,8 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 #edit-bar .eb-mode.sel { outline: 2.5px solid #fff; }
-#eb-add.sel { background: #2e7d5b; }
-#eb-erase.sel { background: #b3591f; }
+#eb-add.sel { background: #2f6fbf; }   /* exclusion blue: you paint exclusion */
+#eb-erase.sel { background: #5b6470; }  /* neutral slate: erasing, not danger */
 #edit-bar .eb-save { background: #2979ff; }
 #edit-bar .eb-info { justify-content: center; }
 #eb-brush-label { font-size: 12px; opacity: 0.75; padding: 2px 0; }
