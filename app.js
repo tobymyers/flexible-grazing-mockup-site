@@ -22,7 +22,11 @@ const REGIONS = {
   'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
                   detail: { center: [-108.628, 42.667], zoom: 14.8 } },
   'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
-                  detail: { center: [-111.392, 42.124], zoom: 14.5 } }
+                  detail: { center: [-111.392, 42.124], zoom: 14.5 } },
+  'holland':    { label: 'Big Hole (Holland)', center: [-113.03, 45.29], zoom: 11.6,
+                  detail: { center: [-112.985, 45.225], zoom: 14.2 } },
+  'martinell':  { label: 'Centennial (Martinell)', center: [-111.82, 44.71], zoom: 12.0,
+                  detail: { center: [-111.79, 44.72], zoom: 13.8 } }
 };
 
 const GAP_HALF_M = 15; // half of the 30 m gap width, for point→square seals
@@ -222,6 +226,7 @@ function addSourcesAndLayers() {
         ['in', 'usfws', ownerStr], 'rgba(171, 71, 188, 0.25)',
         ['in', 'fish and wildlife', ownerStr], 'rgba(171, 71, 188, 0.25)',
         ['in', 'state', ownerStr], 'rgba(66, 165, 245, 0.22)',
+        ['in', 'ranch land', ownerStr], 'rgba(124, 179, 66, 0.25)',
         'rgba(0,0,0,0)']
     }
   });
@@ -346,7 +351,7 @@ function addSourcesAndLayers() {
     minzoom: 11,
     layout: {
       visibility: 'none',
-      'text-field': ['concat', ['get', 'name'], ' — ', ['get', 'source']],
+      'text-field': ['concat', ['get', 'name'], ' · ', ['get', 'source']],
       'text-font': firstSymbolFont(),
       'text-size': 10,
       'symbol-placement': 'point'
@@ -489,15 +494,15 @@ function showExclusionCard(props) {
       '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to a size collars can hold</button></div>';
   } else if (props.enforce === 'too_small') {
     narrowNote =
-      '<p class="card-sub" style="color:#ffd28a"><b>Too small for collars</b>: this spot is under 10 m wide &mdash; ' +
-      'no collar system has ever held a boundary that tight, so it is not part of the keep-out area. ' +
+      '<p class="card-sub" style="color:#ffd28a"><b>Too small for collars</b>: this spot is under 10 m wide. ' +
+      'No collar system has ever held a boundary that tight, so it is not part of the keep-out area. ' +
       'If it matters (a seep, a spring), widen it: the whole widened circle becomes the keep-out.</p>' +
       '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to protect this spot</button></div>';
   } else if (props.enforce === 'irrigated') {
     narrowNote =
       '<p class="card-sub" style="color:#bfe0ff"><b>Watered ground</b>: this land is green because it gets ' +
       'irrigated (satellite irrigation map, 2+ of the last 10 years' +
-      (props.irr_freq != null ? ' &mdash; watered in ' + Math.round(props.irr_freq * 10) + ' of 10' : '') +
+      (props.irr_freq != null ? ', watered in ' + Math.round(props.irr_freq * 10) + ' of 10' : '') +
       '). It is not part of the keep-out area by default. If it should be, add it.</p>' +
       '<div class="gap-toggle"><button id="ex-promote-btn" class="sel-open">Add to exclusion</button></div>';
   } else if (props.enforce === 'included') {
@@ -508,7 +513,7 @@ function showExclusionCard(props) {
   } else if (props.enforce === 'widened') {
     narrowNote =
       '<p class="card-sub" style="color:#9fe3b9"><b>Widened by you</b>: grown by 15 m on every side so the ' +
-      'boundary is at least 30 m across &mdash; wide enough for collars to hold.</p>' +
+      'boundary is at least 30 m across, wide enough for collars to hold.</p>' +
       '<div class="gap-toggle"><button id="ex-unwiden-btn">Undo widening</button></div>';
   }
   const isGuard = !!props.spring_guard;
@@ -633,7 +638,7 @@ function showSeasonCard() {
     `<p class="card-main">${totalAc.toLocaleString()} acres excluded</p>` +
     `<p class="card-sub">Saved ${new Date(d.editSavedAt).toLocaleDateString()} on this device.` +
     (widened ? ` ${widened} small spot${widened > 1 ? 's' : ''} widened to protect.` : '') +
-    ' This map IS your saved version — what you see is what is saved.</p>' +
+    ' This map IS your saved version. What you see is what is saved.</p>' +
     '<div class="gap-toggle">' +
     '<button id="sc-edit" class="sel-open">Adjust boundary</button>' +
     '<button id="sc-reset">Back to suggested</button>' +
@@ -652,9 +657,10 @@ function showSeasonCard() {
   };
 }
 
-// The review tour: fly the rancher to the spots most worth a look —
-// small wet spots (widen or leave out?), the widest narrow pieces, and the
-// biggest zones. "Looks good" is remembered per device.
+// The review tour: fly the rancher to every spot that needs a real decision.
+// Watered ground and small wet spots (in or out?), and narrow pieces (widen
+// or keep?). Big healthy zones need no decision, so they are not in the tour.
+// Each decision is remembered per device.
 function reviewedIds(region) {
   try { return new Set(JSON.parse(localStorage.getItem('reviewed:' + region)) || []); }
   catch (e) { return new Set(); }
@@ -670,11 +676,10 @@ function buildReviewList(region) {
     feats.filter(f => f.properties.enforce === flag).sort(byAcres).slice(0, n)
       .map(f => ({ f, reason }));
   return [
-    ...pick('irrigated', 4, 'Watered ground — green because it gets irrigated. Add it if it should be kept out.'),
-    ...pick('too_small', 4, 'Small wet spot — widen it to protect it, or leave it out.'),
-    ...pick('narrow', 2, 'Narrow piece — collars may not hold it. Widen or shrink it away.'),
-    ...pick('ok', 2, 'One of your biggest zones — check the edges match your land.')
-  ].slice(0, 12);
+    ...pick('irrigated', 4, 'Watered ground, green because it gets irrigated. It is left out unless you add it. Add it to the keep-out area, or leave it out.'),
+    ...pick('too_small', 4, 'A small wet spot, under 10 m wide. Collars cannot hold it as is. Widen it to protect it, or leave it out.'),
+    ...pick('narrow', 2, 'A narrow piece of the keep-out area, under 25 m wide. Collars may not hold a line this tight. Widen it, or keep it as is.')
+  ].slice(0, 10);
 }
 
 let reviewList = [], reviewIdx = 0;
@@ -692,9 +697,14 @@ function clearReviewHighlight() {
 
 function goReviewItem() {
   if (reviewIdx >= reviewList.length) {
-    toast('All checked. Nice work.');
     clearReviewHighlight();
     showHintCard();
+    // the queue refills with the next-biggest spots, so only say "all
+    // checked" when it is actually empty (skipped spots come back too)
+    const more = buildReviewList(currentRegion).length;
+    toast(more
+      ? 'Done for now. The next spots to check are in My areas.'
+      : 'All checked. Nice work.', 3600);
     return;
   }
   const item = reviewList[reviewIdx];
@@ -707,25 +717,29 @@ function goReviewItem() {
   } catch (e) {}
   revealCard();
   // Compact card on purpose: the point is to LOOK at the map, not read.
-  // Tap the zone itself for the full technical card.
-  const canWiden = (p.enforce === 'too_small' || p.enforce === 'narrow') ? '<button id="rv-widen">Widen</button>'
-    : (p.enforce === 'irrigated') ? '<button id="rv-widen">Add it to the exclusion area</button>' : '';
+  // Two decision buttons per spot; each label says exactly what happens.
+  // Any decision records the spot as reviewed and moves to the next one.
+  let actLabel, passLabel, passToast;
+  if (p.enforce === 'too_small') {
+    actLabel = 'Widen to protect'; passLabel = 'Leave it out';
+    passToast = 'Left out. Nothing changes here.';
+  } else if (p.enforce === 'irrigated') {
+    actLabel = 'Add to exclusion'; passLabel = 'Leave it out';
+    passToast = 'Left out. Nothing changes here.';
+  } else { // narrow
+    actLabel = 'Widen'; passLabel = 'Keep as is';
+    passToast = 'Kept as is.';
+  }
   $('#card-body').innerHTML =
     '<button class="card-close" id="rv-stop" aria-label="Stop checking">&times;</button>' +
     `<p class="card-kicker">Check ${reviewIdx + 1} of ${reviewList.length}</p>` +
     `<p class="card-sub" style="margin-top:2px">${item.reason}</p>` +
-    (canWiden ? '<div class="gap-toggle">' + canWiden + '</div>' : '') +
     '<div class="gap-toggle">' +
-    '<button id="rv-ok" class="sel-open">Looks good</button>' +
-    '<button id="rv-skip">Next</button>' +
-    '</div>';
-  const wbtn = $('#rv-widen');
-  if (wbtn) wbtn.onclick = () => {
-    if (p.enforce === 'irrigated') setEnforce(p.id, 'included', 'Added to the keep-out area.');
-    else widenFeature(p.id);
-    goReviewItem();
-  };
-  $('#rv-ok').onclick = () => {
+    `<button id="rv-act" class="sel-open">${actLabel}</button>` +
+    `<button id="rv-pass">${passLabel}</button>` +
+    '</div>' +
+    '<button id="rv-later" class="rv-later">Decide later</button>';
+  const markReviewedAndAdvance = () => {
     try {
       const done = reviewedIds(currentRegion);
       done.add(p.id);
@@ -734,7 +748,22 @@ function goReviewItem() {
     reviewIdx += 1;
     goReviewItem();
   };
-  $('#rv-skip').onclick = () => { reviewIdx += 1; goReviewItem(); };
+  $('#rv-act').onclick = () => {
+    if (p.enforce === 'irrigated') {
+      setEnforce(p.id, 'included', 'Added to the keep-out area.');
+      markReviewedAndAdvance();
+      return;
+    }
+    widenFeature(p.id);
+    // widenFeature can fail (bad geometry); only move on if it worked
+    if (p.enforce === 'widened') markReviewedAndAdvance();
+    else goReviewItem();
+  };
+  $('#rv-pass').onclick = () => {
+    toast(passToast);
+    markReviewedAndAdvance();
+  };
+  $('#rv-later').onclick = () => { reviewIdx += 1; goReviewItem(); };
   $('#rv-stop').onclick = () => { clearReviewHighlight(); showHintCard(); };
 }
 

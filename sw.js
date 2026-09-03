@@ -5,7 +5,7 @@
  */
 'use strict';
 
-const VERSION = 'rip-mockup-v24';
+const VERSION = 'rip-mockup-v26';
 const SHELL_CACHE = VERSION + '-shell';
 const TILE_CACHE = VERSION + '-tiles';
 
@@ -18,7 +18,7 @@ const SHELL = [
   'manifest.webmanifest'
 ];
 
-const REGIONS = ['red-canyon', 'bear-lake'];
+const REGIONS = ['red-canyon', 'bear-lake', 'holland', 'martinell'];
 const LAYERS = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads'];
 const DATA_URLS = [];
 for (const root of ['data', 'stub-data']) {
