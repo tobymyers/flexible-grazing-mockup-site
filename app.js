@@ -16,7 +16,7 @@ const BASEMAP_STYLE = 'https://basemapstyles-api.arcgis.com/arcgis/rest/services
 const DATA_ROOT = 'data';
 const STUB_ROOT = 'stub-data';
 
-const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads'];
+const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water'];
 
 const REGIONS = {
   'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
@@ -829,7 +829,9 @@ function showGapCard(props) {
     '<p class="card-kicker">Water gap</p>' +
     `<p class="card-main">${esc(props.name || 'Water gap')}</p>` +
     `<p class="card-sub" id="gap-status">${open
-      ? 'Open. Cows can walk in here to drink. The gap is about 100 feet wide.'
+      ? (props.lane_ft
+        ? 'Open. A ' + props.lane_ft + ' ft lane lets cows walk down to the water.'
+        : 'Open. Cows can walk in here to drink. The gap is about 100 feet wide.')
       : 'Closed. Cows cannot reach the water here.'}</p>` +
     '<div class="gap-toggle">' +
     `<button id="gap-open-btn" class="${open ? 'sel-open' : ''}">Open</button>` +
@@ -922,6 +924,29 @@ function snapToBoundary(pointPx, tolPx) {
   return best ? map.unproject([best.x, best.y]) : null;
 }
 
+// A water gap is a lane TO water (Toby-approved 3 Sep pm): 30 m wide, from
+// the fence line to the nearest mapped water line, stopping at the channel.
+// If water is farther than ~155 m (500 ft) or unmapped, fall back to the
+// classic 30 m square notch.
+function buildGapPlugGeometry(center) {
+  const water = (regionData[currentRegion].water || { features: [] }).features;
+  let best = null, bestKm = 0.155;
+  const from = turf.point(center);
+  for (const w of water) {
+    try {
+      const np = turf.nearestPointOnLine(w, from, { units: 'kilometers' });
+      if (np.properties.dist < bestKm) { bestKm = np.properties.dist; best = np; }
+    } catch (e) {}
+  }
+  if (!best || bestKm < 0.01) {
+    return { geom: squareAround(center[0], center[1], GAP_HALF_M), laneFt: null };
+  }
+  const lane = turf.buffer(
+    turf.lineString([center, best.geometry.coordinates]),
+    15, { units: 'meters', steps: 4 });
+  return { geom: lane.geometry, laneFt: Math.round(bestKm * 3280.84) };
+}
+
 function pendingFeature() {
   return regionData[currentRegion].water_gaps.features
     .find(f => f.properties.id === 'user-pending');
@@ -930,13 +955,16 @@ function pendingFeature() {
 function showPlacementCard() {
   revealCard();
   const has = !!pendingGapCenter;
+  const f = has && pendingFeature();
+  const lane = f && f.properties.lane_ft;
   $('#card-body').innerHTML =
     '<p class="card-kicker">New water gap</p>' +
     `<p class="card-main">${has
-      ? 'Gap placed. Tap another spot on the line to move it.'
-      : 'Tap the blue fence line where cows should walk in to drink.'}</p>` +
+      ? (lane ? 'A ' + lane + ' ft lane down to the water.' : 'A 100 ft opening in the line.')
+      : 'Slide the map to line up the gap, or tap the fence line.'}</p>` +
+    (has ? '<p class="card-sub">Slide the map or tap the line to move it.</p>' : '') +
     '<div class="gap-toggle">' +
-    (has ? '<button id="gap-done-btn" class="sel-open">Done</button>' : '') +
+    (has ? '<button id="gap-done-btn" class="sel-open">Place gap</button>' : '') +
     '<button id="gap-cancel-btn">Cancel</button>' +
     '</div>';
   if (has) $('#gap-done-btn').onclick = finishGapPlacement;
@@ -949,28 +977,70 @@ function enterGapPlacement() {
   pendingGapCenter = null;
   map.touchZoomRotate.disableRotation();
   if (map.getZoom() < 14.5) map.easeTo({ zoom: 15, essential: true });
+  map.on('move', updatePendingFromCenter);
   showPlacementCard();
+  setTimeout(updatePendingFromCenter, 600);
 }
 
-function handlePlacementTap(e) {
-  const snapped = snapToBoundary(e.point, 48);
-  if (!snapped) { toast('Tap right on the blue line.'); return; }
-  pendingGapCenter = [snapped.lng, snapped.lat];
+function upsertPendingGap(center) {
+  pendingGapCenter = center;
   const feats = regionData[currentRegion].water_gaps.features;
+  const plugInfo = buildGapPlugGeometry(center);
   let f = pendingFeature();
   if (!f) {
     f = {
       type: 'Feature',
       properties: { id: 'user-pending', name: 'My water gap', width_m: 30, open: true, source: 'placed by you' },
-      geometry: { type: 'Point', coordinates: pendingGapCenter }
+      geometry: { type: 'Point', coordinates: center }
     };
     feats.push(f);
     gapOpenState[currentRegion]['user-pending'] = true;
   } else {
-    f.geometry.coordinates = pendingGapCenter;
+    f.geometry.coordinates = center;
+  }
+  f.properties.lane_ft = plugInfo.laneFt;
+  let plug = feats.find(x => x.properties.id === 'user-pending-plug');
+  if (!plug) {
+    plug = { type: 'Feature', properties: { id: 'user-pending-plug', name: 'My water gap', width_m: 30, open: true, source: 'placed by you' }, geometry: plugInfo.geom };
+    feats.push(plug);
+  } else {
+    plug.geometry = plugInfo.geom;
   }
   refreshGapSources();
+}
+
+function handlePlacementTap(e) {
+  const snapped = snapToBoundary(e.point, 48);
+  if (!snapped) { toast('Tap right on the blue line.'); return; }
+  upsertPendingGap([snapped.lng, snapped.lat]);
   showPlacementCard();
+}
+
+// Live preview: while placing, the gap tracks the fence line nearest the
+// screen center as the map pans (the pin-drop pattern).
+let previewThrottle = 0;
+function updatePendingFromCenter() {
+  if (!placingGap) return;
+  const now = Date.now();
+  if (now - previewThrottle < 120) return;
+  previewThrottle = now;
+  const c = map.getContainer();
+  const snapped = snapToBoundary({ x: c.clientWidth / 2, y: c.clientHeight / 2 }, 90);
+  if (snapped) {
+    upsertPendingGap([snapped.lng, snapped.lat]);
+    if ($('#gap-done-btn') == null) {
+      showPlacementCard();
+    } else {
+      // live-update the headline as the lane length changes while panning
+      const f = pendingFeature();
+      const main = document.querySelector('#card-body .card-main');
+      if (f && main) {
+        main.textContent = f.properties.lane_ft
+          ? 'A ' + f.properties.lane_ft + ' ft lane down to the water.'
+          : 'A 100 ft opening in the line.';
+      }
+    }
+  }
 }
 
 function finishGapPlacement() {
@@ -980,6 +1050,8 @@ function finishGapPlacement() {
     const newId = 'user-' + Date.now();
     f.properties.id = newId;
     f.properties.name = 'My water gap ' + userGapCounter;
+    const plug = regionData[currentRegion].water_gaps.features.find(x => x.properties.id === 'user-pending-plug');
+    if (plug) { plug.properties.id = newId + '-plug'; plug.properties.name = f.properties.name; }
     gapOpenState[currentRegion][newId] = true;
     delete gapOpenState[currentRegion]['user-pending'];
   }
@@ -991,8 +1063,10 @@ function finishGapPlacement() {
 
 function cancelGapPlacement() {
   const feats = regionData[currentRegion].water_gaps.features;
-  const i = feats.findIndex(x => x.properties.id === 'user-pending');
-  if (i >= 0) feats.splice(i, 1);
+  for (const pid of ['user-pending', 'user-pending-plug']) {
+    const i = feats.findIndex(x => x.properties.id === pid);
+    if (i >= 0) feats.splice(i, 1);
+  }
   delete gapOpenState[currentRegion]['user-pending'];
   exitGapPlacement();
   refreshGapSources();
@@ -1001,6 +1075,7 @@ function cancelGapPlacement() {
 
 function exitGapPlacement() {
   placingGap = false;
+  map.off('move', updatePendingFromCenter);
   pendingGapCenter = null;
   map.touchZoomRotate.enableRotation();
 }
@@ -1026,6 +1101,11 @@ function wireGapDragging() {
       x => x.properties.id === draggingGapId);
     if (feat) {
       feat.geometry.coordinates = [snapped.lng, snapped.lat];
+      const plugInfo = buildGapPlugGeometry([snapped.lng, snapped.lat]);
+      feat.properties.lane_ft = plugInfo.laneFt;
+      const plug = regionData[currentRegion].water_gaps.features.find(
+        x => x.properties.id === draggingGapId + '-plug');
+      if (plug) plug.geometry = plugInfo.geom;
       refreshGapSources();
     }
   };
@@ -1291,8 +1371,10 @@ function wireBoundaryEditing() {
 
 function removeUserGap(props) {
   const feats = regionData[currentRegion].water_gaps.features;
-  const i = feats.findIndex(x => x.properties.id === props.id);
-  if (i >= 0) feats.splice(i, 1);
+  for (const pid of [props.id, props.id + '-plug']) {
+    const i = feats.findIndex(x => x.properties.id === pid);
+    if (i >= 0) feats.splice(i, 1);
+  }
   delete gapOpenState[currentRegion][props.id];
   refreshGapSources();
   saveUserGaps(currentRegion);
