@@ -19,8 +19,10 @@ const STUB_ROOT = 'stub-data';
 const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads'];
 
 const REGIONS = {
-  'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4 },
-  'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2 }
+  'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
+                  detail: { center: [-108.628, 42.667], zoom: 14.8 } },
+  'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
+                  detail: { center: [-111.392, 42.124], zoom: 14.5 } }
 };
 
 const GAP_HALF_M = 15; // half of the 30 m gap width, for point→square seals
@@ -1272,12 +1274,12 @@ function wireUI() {
 }
 
 const INTRO_STEPS = [
-  { title: 'The blue areas are creek bottoms',
-    body: 'Forty years of satellite pictures show these places stay green late into summer. Cows camp there and wear down the banks, so the collars keep them out.' },
-  { title: 'You know this land better than a satellite',
-    body: 'Tap any area to see why it is there. Dotted areas are questions, not rules — watered hay ground and tiny wet spots. Tap one to decide.' },
-  { title: 'Fix it with your finger',
-    body: 'Tap an area, then "Adjust boundary" to paint it bigger or smaller. Tap the "Water gap" button to add a drink spot where cows should walk in. Tip: pan the map on WiFi first so it works out of service.' }
+  { title: 'Keeping cows out of creek bottoms is hard',
+    body: 'Riparian areas are important, contentious, and difficult to manage. Keeping cows off them takes miles of fence or a lot of riding. Virtual fence collars can do that work.' },
+  { title: 'Blue areas are proposed riparian exclusions',
+    body: 'They are proposals, not final lines. We draw them from three public data sets: 40 years of satellite greenness from the University of Montana, federal river and wetland maps from USGS and Fish and Wildlife, and an irrigation map so watered hay ground stays out. You know this land better than any satellite.' },
+  { title: 'Approve exclusions and add water gaps',
+    body: '&bull; Tap a blue area to fix its shape, then mark it established for the season.<br>&bull; Tap the Water gap button to add a spot where cows walk in to drink.<br>&bull; Tap Check spots to see places where the data disagrees with itself. We may have those wrong.' }
 ];
 let introIdx = 0;
 
@@ -1289,7 +1291,7 @@ function wireIntro() {
     const st = INTRO_STEPS[introIdx];
     $('#intro-step-label').textContent = (introIdx + 1) + ' of ' + INTRO_STEPS.length;
     $('#intro-title').textContent = st.title;
-    $('#intro-body').textContent = st.body;
+    $('#intro-body').innerHTML = st.body;
     $('#intro-next').textContent = introIdx === INTRO_STEPS.length - 1 ? 'Got it' : 'Next';
   };
   const done = () => {
@@ -1410,7 +1412,8 @@ async function switchRegion(region) {
   refreshRegionSources();
   showHintCard();
   updateSeasonChip();
-  flyToRegion(region);
+  const det = REGIONS[region].detail;
+  map.flyTo({ center: det.center, zoom: det.zoom, essential: true });
 }
 
 /* ---------------- Map clicks ---------------- */
@@ -1480,10 +1483,10 @@ async function boot() {
     wireMapClicks();
     wireGapDragging();
     wireBoundaryEditing();
-    // Land the first view on the data itself (real data may sit elsewhere
-    // in the region than the hard-coded fallback center).
-    const b = regionBounds(currentRegion);
-    if (b) map.fitBounds(b, { padding: 60, maxZoom: 14, duration: 0 });
+    // Open zoomed in on a real riparian corridor so the first thing anyone
+    // sees is a blue exclusion hugging a real creek (Toby, 3 Sep pm).
+    const det = REGIONS[currentRegion].detail;
+    map.jumpTo({ center: det.center, zoom: det.zoom });
     if (usedStubData) {
       console.warn('Some layers are using stub-data/ placeholders (real data/ files not found yet).');
     }
