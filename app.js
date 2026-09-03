@@ -941,10 +941,20 @@ function buildGapPlugGeometry(center) {
   if (!best || bestKm < 0.01) {
     return { geom: squareAround(center[0], center[1], GAP_HALF_M), laneFt: null };
   }
-  const lane = turf.buffer(
-    turf.lineString([center, best.geometry.coordinates]),
-    15, { units: 'meters', steps: 4 });
-  return { geom: lane.geometry, laneFt: Math.round(bestKm * 3280.84) };
+  // square-cornered lane (Toby prefers square edges): a 30 m wide rectangle
+  // from the fence point to the water point
+  const A = turf.point(center);
+  const B = turf.point(best.geometry.coordinates);
+  const brg = turf.bearing(A, B);
+  const km = 0.015; // 15 m half-width
+  const c1 = turf.destination(A, km, brg - 90).geometry.coordinates;
+  const c2 = turf.destination(A, km, brg + 90).geometry.coordinates;
+  const c3 = turf.destination(B, km, brg + 90).geometry.coordinates;
+  const c4 = turf.destination(B, km, brg - 90).geometry.coordinates;
+  return {
+    geom: { type: 'Polygon', coordinates: [[c1, c2, c3, c4, c1]] },
+    laneFt: Math.round(bestKm * 3280.84)
+  };
 }
 
 function pendingFeature() {
@@ -961,8 +971,8 @@ function showPlacementCard() {
     '<p class="card-kicker">New water gap</p>' +
     `<p class="card-main">${has
       ? (lane ? 'A ' + lane + ' ft lane down to the water.' : 'A 100 ft opening in the line.')
-      : 'Slide the map to line up the gap, or tap the fence line.'}</p>` +
-    (has ? '<p class="card-sub">Slide the map or tap the line to move it.</p>' : '') +
+      : 'Tap the fence line where cows should walk in.'}</p>` +
+    (has ? '<p class="card-sub">Drag the drop, or tap another spot on the line, to move it.</p>' : '') +
     '<div class="gap-toggle">' +
     (has ? '<button id="gap-done-btn" class="sel-open">Place gap</button>' : '') +
     '<button id="gap-cancel-btn">Cancel</button>' +
@@ -977,9 +987,7 @@ function enterGapPlacement() {
   pendingGapCenter = null;
   map.touchZoomRotate.disableRotation();
   if (map.getZoom() < 14.5) map.easeTo({ zoom: 15, essential: true });
-  map.on('move', updatePendingFromCenter);
   showPlacementCard();
-  setTimeout(updatePendingFromCenter, 600);
 }
 
 function upsertPendingGap(center) {
@@ -1011,36 +1019,33 @@ function upsertPendingGap(center) {
 
 function handlePlacementTap(e) {
   const snapped = snapToBoundary(e.point, 48);
-  if (!snapped) { toast('Tap right on the blue line.'); return; }
+  if (!snapped) {
+    if (!pendingGapCenter) toast('Tap right on the blue line.');
+    return;
+  }
   upsertPendingGap([snapped.lng, snapped.lat]);
   showPlacementCard();
 }
 
-// Live preview: while placing, the gap tracks the fence line nearest the
-// screen center as the map pans (the pin-drop pattern).
-let previewThrottle = 0;
-function updatePendingFromCenter() {
-  if (!placingGap) return;
-  const now = Date.now();
-  if (now - previewThrottle < 120) return;
-  previewThrottle = now;
-  const c = map.getContainer();
-  const snapped = snapToBoundary({ x: c.clientWidth / 2, y: c.clientHeight / 2 }, 90);
-  if (snapped) {
-    upsertPendingGap([snapped.lng, snapped.lat]);
-    if ($('#gap-done-btn') == null) {
-      showPlacementCard();
-    } else {
-      // live-update the headline as the lane length changes while panning
-      const f = pendingFeature();
-      const main = document.querySelector('#card-body .card-main');
-      if (f && main) {
-        main.textContent = f.properties.lane_ft
-          ? 'A ' + f.properties.lane_ft + ' ft lane down to the water.'
-          : 'A 100 ft opening in the line.';
-      }
-    }
+// One-time seed when entering placement: put the preview on the fence line
+// nearest the screen center, then leave it alone. Move it by dragging the
+// drop or tapping another spot on the line (Toby, 3 Sep: the map should pan
+// freely; the gap must never move on its own).
+// Gaps saved before lanes existed are point-only squares; upgrade them to
+// the lane shape once water data is available.
+function migrateLegacyGaps() {
+  const d = regionData[currentRegion];
+  if (!d || !d.water) return;
+  const feats = d.water_gaps.features;
+  let changed = false;
+  for (const f of feats.filter(x => x.geometry.type === 'Point' && String(x.properties.id).startsWith('user-'))) {
+    if (feats.some(x => x.properties.id === f.properties.id + '-plug')) continue;
+    const info = buildGapPlugGeometry(f.geometry.coordinates);
+    f.properties.lane_ft = info.laneFt;
+    feats.push({ type: 'Feature', properties: { id: f.properties.id + '-plug', name: f.properties.name, width_m: 30, open: true, source: 'placed by you' }, geometry: info.geom });
+    changed = true;
   }
+  if (changed) { saveUserGaps(currentRegion); refreshGapSources(); }
 }
 
 function finishGapPlacement() {
@@ -1075,7 +1080,6 @@ function cancelGapPlacement() {
 
 function exitGapPlacement() {
   placingGap = false;
-  map.off('move', updatePendingFromCenter);
   pendingGapCenter = null;
   map.touchZoomRotate.enableRotation();
 }
@@ -1089,6 +1093,7 @@ function wireGapDragging() {
     if (editMode) return;
     const f = e.features && e.features[0];
     if (!f || !String(f.properties.id).startsWith('user-')) return;
+    if (placingGap && f.properties.id !== 'user-pending') return;
     e.preventDefault();
     draggingGapId = f.properties.id;
     map.dragPan.disable();
@@ -1614,6 +1619,7 @@ async function switchRegion(region) {
   refreshRegionSources();
   showHintCard();
   updateSeasonChip();
+  migrateLegacyGaps();
   const det = REGIONS[region].detail;
   map.flyTo({ center: det.center, zoom: det.zoom, essential: true });
 }
@@ -1699,6 +1705,7 @@ async function boot() {
     // and the season chip can reflect saved edits
     showHintCard();
     updateSeasonChip();
+    migrateLegacyGaps();
   };
   map.once('load', setup);
   const readyPoll = setInterval(() => {
