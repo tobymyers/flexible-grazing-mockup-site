@@ -1373,12 +1373,15 @@ function openAreasSheet(section) {
   }).join('')
     : '<p class="areas-empty">None yet. Tap the Water gap button, then tap the fence line.</p>';
 
+  const savedNote = d && d.editSavedAt
+    ? `<p class="areas-empty" style="margin:0 0 4px">Your edits are saved on this phone (last save ${new Date(d.editSavedAt).toLocaleDateString()}).</p>`
+    : '';
   let toCheck = 0;
   try { toCheck = buildReviewList(currentRegion).length; } catch (e) {}
   const checkRow = toCheck
     ? `<button class="area-row" id="areas-check-row"><span>&#9888; Check suggested spots<small>Places the data is not sure about</small></span><span class="area-badge">${toCheck}</span></button>`
     : '';
-  list.innerHTML = checkRow +
+  list.innerHTML = savedNote + checkRow +
     `<h3 class="area-section-h" id="sec-approved">Approved for 2026 (${mine.length})</h3>` + zoneRows +
     `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows;
 

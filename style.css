@@ -24,13 +24,17 @@ body {
 
 #map { position: fixed; inset: 0; }
 /* keep the corner for the scale bar, lifted above the bottom card */
-.maplibregl-ctrl-bottom-left { bottom: 205px; left: 10px; }
+.maplibregl-ctrl-bottom-left { bottom: calc(118px + var(--safe-b)); left: 10px; }
 .maplibregl-ctrl-scale {
   background: rgba(20, 24, 20, 0.65); color: #f2f3ee;
   border: 1.5px solid rgba(242, 243, 238, 0.7); border-top: none;
   font-size: 11px; border-radius: 0 0 6px 6px;
 }
-.maplibregl-ctrl-bottom-right { bottom: calc(182px + var(--safe-b)); right: 6px; } /* compact attribution, above the cards */
+.maplibregl-ctrl-bottom-right {
+  bottom: calc(88px + var(--safe-b)); left: 8px; right: auto;
+  opacity: 0.55;
+}
+.maplibregl-ctrl-bottom-right:hover { opacity: 1; }
 .maplibregl-ctrl button.maplibregl-ctrl-geolocate { display: none; } /* our own round button triggers it */
 
 /* ---- Round floating buttons ---- */
