@@ -905,7 +905,12 @@ function _halfPlanes(A, B) {
 }
 function _splitMaxM(ring, depth) {
   depth = depth || 0;
-  if (ring.length <= COLLAR.maxPts || depth > 14) return [ring];
+  if (ring.length <= COLLAR.maxPts) return [ring];
+  if (depth > 14) {            // last resort: straighten harder until it fits
+    let tol = COLLAR.simplify;
+    while (ring.length > COLLAR.maxPts && tol < 400) { tol *= 1.5; ring = _simplifyRingM(ring, tol); }
+    return [ring];
+  }
   let cut = _cutLineM(ring);
   if (!cut) {
     // fallback: through the middle, across the longer side of the bbox
