@@ -308,3 +308,6 @@ body {
 .zone-badge.prop { background: rgba(111, 179, 232, 0.18); color: #9fd0f0; }
 .zone-badge.mid  { background: rgba(255, 255, 255, 0.12); color: var(--ink); }
 .zone-badge.gold { background: rgba(217, 160, 58, 0.2); color: var(--mint); }
+
+/* info sheet: one-line intro under a section heading */
+.sheet-sub { margin: -4px 0 10px; font-size: 14px; color: var(--muted); line-height: 1.4; }

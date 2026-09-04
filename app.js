@@ -619,6 +619,7 @@ function setEnforce(fid, val, msg, quiet) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f) return;
   f.properties.enforce = val;
+  if (val === 'included') snapFeatureToCollar(fid);   // shape a collar can hold
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
@@ -810,6 +811,168 @@ function goReviewItem() {
   $('#rv-stop').onclick = () => { clearReviewHighlight(); showHintCard(); };
 }
 
+
+/* ---------------- Collar shape rules (mirror of 06 gis data/collar.py) ----------------
+ * Pad 10 m, fill bays, straighten edges to 25 m, no corner under 45 degrees on
+ * either side of the line, at most 30 points per piece (long pieces are cut
+ * across their width like fence panels). Runs on every rancher edit so what
+ * you see is the shape a collar can hold. Keep in step with collar.py. */
+const COLLAR = { pad: 10, close: 30, simplify: 25, minDeg: 45, chamfer: 40, maxPts: 30 };
+
+function _toLocal(coords, o) {
+  const kx = 111320 * Math.cos(o[1] * Math.PI / 180), ky = 110540;
+  return coords.map(c => [(c[0] - o[0]) * kx, (c[1] - o[1]) * ky]);
+}
+function _fromLocal(pts, o) {
+  const kx = 111320 * Math.cos(o[1] * Math.PI / 180), ky = 110540;
+  return pts.map(p => [Math.round((p[0] / kx + o[0]) * 1e6) / 1e6, Math.round((p[1] / ky + o[1]) * 1e6) / 1e6]);
+}
+function _ringArea(r) {
+  let s = 0;
+  for (let i = 0; i < r.length; i++) { const a = r[i], b = r[(i + 1) % r.length]; s += a[0] * b[1] - b[0] * a[1]; }
+  return s / 2;
+}
+function _ccw(r) { return _ringArea(r) >= 0 ? r : r.slice().reverse(); }
+function _closeRing(r) { return r.concat([r[0]]); }
+function _simplifyRingM(ring, tol) {
+  if (ring.length < 4) return ring;
+  try {
+    const s = turf.simplify(turf.polygon([_closeRing(ring)]), { tolerance: tol, highQuality: true });
+    const out = s.geometry.coordinates[0].slice(0, -1);
+    return out.length >= 3 ? out : ring;
+  } catch (e) { return ring; }
+}
+function _fixCornersM(ring) {
+  ring = _ccw(_simplifyRingM(ring, 3));
+  for (let pass = 0; pass < 6; pass++) {
+    if (ring.length < 3) break;
+    const n = ring.length, out = [];
+    let changed = false;
+    for (let i = 0; i < n; i++) {
+      const a = ring[(i - 1 + n) % n], b = ring[i], c = ring[(i + 1) % n];
+      const v1 = [a[0] - b[0], a[1] - b[1]], v2 = [c[0] - b[0], c[1] - b[1]];
+      const l1 = Math.hypot(v1[0], v1[1]), l2 = Math.hypot(v2[0], v2[1]);
+      if (l1 < 1e-9 || l2 < 1e-9) { changed = true; continue; }
+      const cos = Math.max(-1, Math.min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2)));
+      const sharp = Math.acos(cos) * 180 / Math.PI;   // same either side of the line
+      if (sharp >= COLLAR.minDeg) { out.push(b); continue; }
+      const tt = Math.min(COLLAR.chamfer, 0.5 * l1, 0.5 * l2);
+      if (tt < 1) { changed = true; continue; }        // micro-corner: drop it
+      out.push([b[0] + v1[0] / l1 * tt, b[1] + v1[1] / l1 * tt]);
+      out.push([b[0] + v2[0] / l2 * tt, b[1] + v2[1] / l2 * tt]);
+      changed = true;
+    }
+    if (!out.length) break;
+    const keep = [out[0]];
+    for (const p of out.slice(1)) {
+      const q = keep[keep.length - 1];
+      if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 0.5) keep.push(p);
+    }
+    ring = keep;
+    if (!changed) break;
+  }
+  return ring;
+}
+function _cutLineM(ring) {
+  const n = ring.length, step = Math.max(1, Math.floor(n / 16)), far = Math.max(3, Math.floor(n / 4));
+  let best = null;
+  for (let i = 0; i < n; i += step) {
+    const P = ring[i];
+    for (let j = 0; j < n; j++) {
+      const di = Math.min(((j - i) % n + n) % n, ((i - j) % n + n) % n);
+      if (di < far) continue;
+      const A = ring[j], B = ring[(j + 1) % n];
+      const vx = B[0] - A[0], vy = B[1] - A[1], L2 = vx * vx + vy * vy;
+      let t = L2 ? ((P[0] - A[0]) * vx + (P[1] - A[1]) * vy) / L2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const Q = [A[0] + vx * t, A[1] + vy * t];
+      const d = Math.hypot(P[0] - Q[0], P[1] - Q[1]);
+      if (!best || d < best.d) best = { d, A: P, B: Q };
+    }
+  }
+  return best;
+}
+function _halfPlanes(A, B) {
+  let vx = B[0] - A[0], vy = B[1] - A[1];
+  const L = Math.hypot(vx, vy);
+  if (L < 1e-6) return null;
+  vx /= L; vy /= L;
+  const nx = -vy, ny = vx, R = 20000;
+  const a = [A[0] - vx * R, A[1] - vy * R], b = [B[0] + vx * R, B[1] + vy * R];
+  const left = turf.polygon([[a, b, [b[0] + nx * R, b[1] + ny * R], [a[0] + nx * R, a[1] + ny * R], a]]);
+  const right = turf.polygon([[a, b, [b[0] - nx * R, b[1] - ny * R], [a[0] - nx * R, a[1] - ny * R], a]]);
+  return [left, right];
+}
+function _splitMaxM(ring, depth) {
+  depth = depth || 0;
+  if (ring.length <= COLLAR.maxPts || depth > 14) return [ring];
+  let cut = _cutLineM(ring);
+  if (!cut) {
+    // fallback: through the middle, across the longer side of the bbox
+    const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const wide = (Math.max(...xs) - Math.min(...xs)) >= (Math.max(...ys) - Math.min(...ys));
+    cut = wide ? { A: [cx, cy - 1], B: [cx, cy + 1] } : { A: [cx - 1, cy], B: [cx + 1, cy] };
+  }
+  const planes = _halfPlanes(cut.A, cut.B);
+  if (!planes) return [ring];
+  const poly = turf.polygon([_closeRing(ring)]);
+  const pieces = [];
+  for (const hp of planes) {
+    let x = null;
+    try { x = turf.intersect(turf.featureCollection([poly, hp])); } catch (e) { x = null; }
+    if (!x) continue;
+    for (const p of turf.flatten(x).features) {
+      const r = p.geometry.coordinates[0].slice(0, -1);
+      if (r.length >= 3 && Math.abs(_ringArea(r)) > 25) pieces.push(r);
+    }
+  }
+  if (pieces.length < 2) return [ring];
+  const out = [];
+  for (const r of pieces) for (const q of _splitMaxM(_fixCornersM(r), depth + 1)) out.push(q);
+  return out;
+}
+
+// Feature (lon/lat polygon) -> array of collar-ready Features. The first
+// keeps the original id; extra panels get "-2", "-3", ...
+function collarizeFeature(f) {
+  let g;
+  try {
+    g = turf.buffer(f, COLLAR.pad, { units: 'meters', steps: 2 });
+    g = g && turf.buffer(g, COLLAR.close, { units: 'meters', steps: 2 });
+    g = g && turf.buffer(g, -COLLAR.close, { units: 'meters', steps: 2 });
+  } catch (e) { g = null; }
+  if (!g) return [f];
+  const o = turf.centroid(f).geometry.coordinates;
+  const rings = [];
+  for (const p of turf.flatten(g).features) {
+    let ring = _toLocal(p.geometry.coordinates[0].slice(0, -1), o);   // outer ring only: no holes
+    ring = _ccw(_simplifyRingM(ring, COLLAR.simplify));
+    if (Math.abs(_ringArea(ring)) < 400) continue;
+    for (const r of _splitMaxM(_fixCornersM(ring))) rings.push(r);
+  }
+  if (!rings.length) return [f];
+  return rings.map((r, i) => {
+    const feat = {
+      type: 'Feature',
+      properties: Object.assign({}, f.properties, { id: i ? f.properties.id + '-' + (i + 1) : f.properties.id, pts: r.length }),
+      geometry: { type: 'Polygon', coordinates: [_closeRing(_fromLocal(r, o))] }
+    };
+    feat.properties.acres = Math.round(turf.area(feat) / 4046.8564 * 10) / 10;
+    return feat;
+  });
+}
+
+// Replace one feature in the region's list with its collar-ready pieces.
+function snapFeatureToCollar(fid) {
+  const d = regionData[currentRegion];
+  const idx = d.exclusion.features.findIndex(x => x.properties.id === fid);
+  if (idx < 0) return [];
+  const pieces = collarizeFeature(d.exclusion.features[idx]);
+  d.exclusion.features.splice(idx, 1, ...pieces);
+  return pieces;
+}
+
 function persistSeasonEdit(region) {
   try {
     localStorage.setItem('riparianEdit:' + region, JSON.stringify({
@@ -844,6 +1007,7 @@ function widenFeature(fid, quiet) {
   f.geometry = grown.geometry;
   f.properties.enforce = 'widened';
   f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  snapFeatureToCollar(fid);
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
@@ -1393,11 +1557,16 @@ function wireBoundaryEditing() {
   };
   $('#eb-save').onclick = () => {
     const d = regionData[currentRegion];
-    // keep the saved shape light: ~1 m simplify, per UX research
-    d.exclusion.features = d.exclusion.features.map(f => {
-      try { return Object.assign(turf.simplify(f, { tolerance: 0.00001, highQuality: true }), { properties: f.properties }); }
-      catch (e) { return f; }
-    });
+    // every zone you touched snaps to the collar shape rules (pad, straight
+    // edges, no sharp corners, 30 points max). New panels inherit "touched".
+    let snapped = 0;
+    for (const fid of Array.from(editTouchedIds)) {
+      const f = d.exclusion.features.find(x => x.properties.id === fid);
+      if (!f || f.properties.enforce === 'irrigated' || f.properties.enforce === 'too_small') continue;
+      const pieces = snapFeatureToCollar(fid);
+      for (const p of pieces) editTouchedIds.add(p.properties.id);
+      snapped += 1;
+    }
     try {
       localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
         season: '2026', savedAt: Date.now(), features: d.exclusion.features
@@ -1427,7 +1596,7 @@ function wireBoundaryEditing() {
     if (zone) showExclusionCard(zone.properties);
     toast(changedEstablished
       ? 'This zone changed. Mark it established again when it looks right.'
-      : 'Changes saved.');
+      : (snapped ? 'Saved. Edges snapped to collar rules.' : 'Changes saved.'));
   };
 
   // One finger paints. TWO fingers move the map (so wide riparian areas can
