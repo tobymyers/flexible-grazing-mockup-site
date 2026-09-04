@@ -1811,4 +1811,63 @@ async function boot() {
   }
 }
 
-boot();
+/* ---------------- Invite gate ----------------
+   Keeps the prototype off random screens: the app only boots with a valid
+   invite key (?key=... in the link, remembered on the device). Keys are
+   checked as SHA-256 hashes; revoke one by removing its hash + redeploy.
+   This is a screen door, not a vault: fine for a prototype, not security. */
+const INVITE_HASHES = [
+  'c7145d4de27110e2dfc4eabdbb9e7511214118cf965fa41c47d2cdb9e7c793af',
+  'dfb9000d54ed31e2c44bbdc0addf17782452598a580f54f68ed9f19a10826960',
+  '8337b0ad30a9f76ea525b12411994aec7d7c0fa4fa20dc225aef94350a75b60f',
+  'a17b4ab5ed2d730df00e7212e6610ad8dddcf7c4baf3d7d558a780f2c7b2fbd3',
+  '234eb0eaab329296eef33ccd9ba6e934ffd7f232d35bfb3b78ce6d7f22e672b0',
+  'c36576d78294895a44eedd51dfa493b4e984ec2ec6da156d03d6a728b77ad673'
+];
+
+async function sha256Hex(s) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+async function inviteOk() {
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return true;
+  const u = new URL(location.href);
+  let key = u.searchParams.get('key');
+  if (!key) { try { key = localStorage.getItem('inviteKey'); } catch (e) {} }
+  if (!key) return false;
+  key = key.trim();
+  const h = await sha256Hex(key);
+  if (!INVITE_HASHES.includes(h)) return false;
+  try { localStorage.setItem('inviteKey', key); } catch (e) {}
+  if (u.searchParams.has('key')) {
+    u.searchParams.delete('key');
+    history.replaceState(null, '', u.pathname + (u.searchParams.toString() ? '?' + u.searchParams.toString() : ''));
+  }
+  return true;
+}
+
+function showLockScreen() {
+  document.body.innerHTML =
+    '<div style="position:fixed;inset:0;background:#14150f;color:#f2f3ee;display:flex;align-items:center;justify-content:center;padding:24px;font-family:-apple-system,sans-serif">' +
+    '<div style="max-width:340px;text-align:center">' +
+    '<p style="font-size:40px;margin:0">&#128274;</p>' +
+    '<h2 style="margin:10px 0 8px">Private prototype</h2>' +
+    '<p style="color:#b9bdb0;font-size:15px;line-height:1.5">This map is invite-only. Open the invite link you were sent, or type the code from it.</p>' +
+    '<input id="lock-key" type="text" placeholder="invite code" autocapitalize="none" autocorrect="off" ' +
+    'style="width:100%;min-height:48px;border-radius:12px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#f2f3ee;font-size:16px;padding:0 14px;margin:14px 0 10px;text-align:center">' +
+    '<button id="lock-go" style="width:100%;min-height:52px;border:none;border-radius:12px;background:#2979ff;color:#fff;font-size:16px;font-weight:700">Open the map</button>' +
+    '</div></div>';
+  document.getElementById('lock-go').onclick = async () => {
+    const k = document.getElementById('lock-key').value.trim();
+    if (k && INVITE_HASHES.includes(await sha256Hex(k))) {
+      try { localStorage.setItem('inviteKey', k); } catch (e) {}
+      location.reload();
+    } else {
+      document.getElementById('lock-key').style.borderColor = '#e53935';
+    }
+  };
+}
+
+inviteOk().then(ok => { if (ok) boot(); else showLockScreen(); });
+

@@ -290,7 +290,7 @@ body {
   margin: 14px 0 2px; font-size: 13px; font-weight: 700;
   color: var(--mint); text-transform: uppercase; letter-spacing: .4px;
 }
-#areas-sheet { max-height: 70vh; overflow-y: auto; }
+#areas-sheet, #info-sheet, #layer-sheet { max-height: 72vh; overflow-y: auto; }
 #gap-name-input {
   flex: 2; min-height: 44px; border-radius: 12px; border: 1px solid rgba(255,255,255,.25);
   background: rgba(255,255,255,.08); color: var(--ink); font-size: 15px; padding: 0 12px;
