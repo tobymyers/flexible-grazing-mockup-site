@@ -111,7 +111,9 @@ body {
 /* ---- Bottom row: info card + water-gap button ---- */
 #bottom-row {
   position: fixed; z-index: 15;
-  left: 14px; right: 14px; bottom: calc(96px + var(--safe-b));
+  left: 50%; transform: translateX(-50%);
+  width: min(640px, calc(100vw - 28px));
+  bottom: calc(96px + var(--safe-b));
   display: flex; align-items: flex-end; gap: 10px;
   pointer-events: none;
 }
@@ -146,7 +148,8 @@ body {
 
 /* Boundary edit bar: big gloved-thumb targets, high contrast */
 #edit-bar {
-  position: fixed; left: 10px; right: 10px; bottom: 14px; z-index: 30;
+  position: fixed; left: 50%; transform: translateX(-50%);
+  width: min(560px, calc(100vw - 20px)); bottom: 14px; z-index: 30;
   background: rgba(24, 28, 24, 0.94); border-radius: 22px; padding: 12px;
   backdrop-filter: blur(8px);
 }
@@ -180,7 +183,9 @@ body {
 /* ---- Bottom nav ---- */
 #bottom-nav {
   position: fixed; z-index: 20;
-  left: 12px; right: 12px; bottom: calc(10px + var(--safe-b));
+  left: 50%; transform: translateX(-50%);
+  width: min(480px, calc(100vw - 24px));
+  bottom: calc(10px + var(--safe-b));
   background: var(--bg); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border-radius: 999px; height: 68px;
   display: flex; align-items: stretch; padding: 6px;
