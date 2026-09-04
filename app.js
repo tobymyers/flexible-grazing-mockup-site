@@ -777,6 +777,7 @@ function goReviewItem() {
   // After a decision we STAY on the spot so the color change is visible
   // (dotted turns solid blue, the widen circle grows). Next moves on.
   const showResult = (txt, mapChanged) => {
+    clearReviewHighlight(); // decided: it now looks like any other zone
     revealCard();
     $('#card-body').innerHTML =
       '<button class="card-close" id="rv-stop" aria-label="Stop checking">&times;</button>' +
