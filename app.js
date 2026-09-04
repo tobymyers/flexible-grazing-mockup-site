@@ -446,6 +446,7 @@ function displayedExclusionFC(region) {
 }
 
 function refreshRegionSources() {
+  if (!map.getSource('exclusion')) return;
   const d = regionData[currentRegion];
   const gaps = buildGapCollections(currentRegion);
   map.getSource('ownership').setData(d.ownership);
@@ -459,6 +460,9 @@ function refreshRegionSources() {
 }
 
 function refreshGapSources() {
+  // sources exist only after the style loads; data edits made before that
+  // are picked up by addSourcesAndLayers anyway
+  if (!map.getSource('gap-seals')) return;
   const gaps = buildGapCollections(currentRegion);
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
@@ -611,12 +615,13 @@ function removeSpringGuard(fid) {
 
 // Flip a feature between ghost and included (no geometry change), persisted
 // with the seasonal edit.
-function setEnforce(fid, val, msg) {
+function setEnforce(fid, val, msg, quiet) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f) return;
   f.properties.enforce = val;
   persistSeasonEdit(currentRegion);
   refreshGapSources();
+  if (quiet) return;
   showExclusionCard(f.properties);
   toast(msg);
 }
@@ -761,29 +766,44 @@ function goReviewItem() {
     `<button id="rv-pass">${passLabel}</button>` +
     '</div>' +
     '<button id="rv-later" class="rv-later">Decide later</button>';
-  const markReviewedAndAdvance = () => {
+  const markReviewed = () => {
     try {
       const done = reviewedIds(currentRegion);
       done.add(p.id);
       localStorage.setItem('reviewed:' + currentRegion, JSON.stringify([...done]));
     } catch (e) {}
-    reviewIdx += 1;
-    goReviewItem();
+  };
+  const advance = () => { reviewIdx += 1; goReviewItem(); };
+  // After a decision we STAY on the spot so the color change is visible
+  // (dotted turns solid blue, the widen circle grows). Next moves on.
+  const showResult = (txt, mapChanged) => {
+    revealCard();
+    $('#card-body').innerHTML =
+      '<button class="card-close" id="rv-stop" aria-label="Stop checking">&times;</button>' +
+      `<p class="card-kicker">Check ${reviewIdx + 1} of ${reviewList.length}</p>` +
+      `<p class="card-main">&#10003; ${txt}</p>` +
+      (mapChanged ? '<p class="card-sub">The change shows on the map.</p>' : '') +
+      '<div class="gap-toggle"><button id="rv-next" class="sel-open">Next spot</button></div>';
+    $('#rv-next').onclick = advance;
+    $('#rv-stop').onclick = () => { clearReviewHighlight(); showHintCard(); };
   };
   $('#rv-act').onclick = () => {
     if (p.enforce === 'irrigated') {
-      setEnforce(p.id, 'included', 'Added to the keep-out area.');
-      markReviewedAndAdvance();
+      setEnforce(p.id, 'included', '', true);
+      markReviewed();
+      showResult('Added to the exclusion.', true);
       return;
     }
-    widenFeature(p.id);
-    // widenFeature can fail (bad geometry); only move on if it worked
-    if (p.enforce === 'widened') markReviewedAndAdvance();
-    else goReviewItem();
+    widenFeature(p.id, true);
+    // widenFeature can fail (bad geometry); only proceed if it worked
+    if (p.enforce === 'widened') {
+      markReviewed();
+      showResult('Widened. Collars can hold it now.', true);
+    } else goReviewItem();
   };
   $('#rv-pass').onclick = () => {
-    toast(passToast);
-    markReviewedAndAdvance();
+    markReviewed();
+    showResult(passToast, false);
   };
   $('#rv-later').onclick = () => { reviewIdx += 1; goReviewItem(); };
   $('#rv-stop').onclick = () => { clearReviewHighlight(); showHintCard(); };
@@ -803,7 +823,7 @@ function persistSeasonEdit(region) {
 // Widen a too-small/narrow piece by 15 m on every side, guaranteeing the
 // result is at least 30 m across everywhere — collar-enforceable. The
 // original shape is kept on the feature so widening can be undone.
-function widenFeature(fid) {
+function widenFeature(fid, quiet) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f) return;
   let grown;
@@ -825,6 +845,7 @@ function widenFeature(fid) {
   f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
   persistSeasonEdit(currentRegion);
   refreshGapSources();
+  if (quiet) return;
   showExclusionCard(f.properties);
   toast('Widened. Collars can hold this now.');
 }
