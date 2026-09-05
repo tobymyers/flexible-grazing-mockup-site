@@ -903,7 +903,9 @@ function _cutLineM(ring) {
       }
     }
     if (!hit) continue;
-    const score = hit.s * (1 + hit.dev / 30);
+    // prefer cuts that leave both seam corners within 10 deg of square (no
+    // seam corner ever needs clipping); among those, the shortest
+    const score = (hit.dev <= 10 ? 0 : 1e9) + hit.s * (1 + hit.dev / 30);
     if (!best || score < best.score) best = { score, A: P, B: [P[0] + nx * hit.s, P[1] + ny * hit.s] };
   }
   return best;
@@ -948,8 +950,28 @@ function _splitMaxM(ring, depth) {
     }
   }
   if (pieces.length < 2) return [ring];
+  // Seam rule: a corner clipped off one panel at the seam is handed to the
+  // neighbouring panel, so no wedge of pasture ever opens between panels.
+  const fixed = pieces.map(r => _fixCornersM(r));
+  for (let i = 0; i < pieces.length; i++) {
+    let wedge = null;
+    try { wedge = turf.difference(turf.featureCollection([turf.polygon([_closeRing(pieces[i])]), turf.polygon([_closeRing(fixed[i])])])); } catch (e) { wedge = null; }
+    if (!wedge || turf.area(wedge) < 1) continue;
+    for (let j = 0; j < fixed.length; j++) {
+      if (j === i) continue;
+      try {
+        const pj = turf.polygon([_closeRing(fixed[j])]);
+        if (!turf.booleanIntersects(turf.buffer(pj, 0.5, { units: 'meters', steps: 1 }), wedge)) continue;
+        const u = turf.union(turf.featureCollection([pj, wedge]));
+        if (!u) continue;
+        const parts = turf.flatten(u).features.map(f => f.geometry.coordinates[0].slice(0, -1));
+        parts.sort((x, y) => Math.abs(_ringArea(y)) - Math.abs(_ringArea(x)));
+        if (parts[0] && parts[0].length >= 3) fixed[j] = _ccw(parts[0]);
+      } catch (e) { /* keep as is */ }
+    }
+  }
   const out = [];
-  for (const r of pieces) for (const q of _splitMaxM(_fixCornersM(r), depth + 1)) out.push(q);
+  for (const r of fixed) for (const q of _splitMaxM(r, depth + 1)) out.push(q);
   return out;
 }
 
