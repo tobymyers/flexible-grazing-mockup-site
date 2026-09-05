@@ -619,7 +619,7 @@ function setEnforce(fid, val, msg, quiet) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f) return;
   f.properties.enforce = val;
-  if (val === 'included') snapFeatureToCollar(fid);   // shape a collar can hold
+  if (val === 'included') snapFeatureToCollar(fid);   // shape a collar can hold, lanes kept
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
@@ -813,11 +813,12 @@ function goReviewItem() {
 
 
 /* ---------------- Collar shape rules (mirror of 06 gis data/collar.py) ----------------
- * Pad 10 m, fill bays, straighten edges to 25 m, no corner under 45 degrees on
- * either side of the line, at most 30 points per piece (long pieces are cut
- * across their width like fence panels). Runs on every rancher edit so what
- * you see is the shape a collar can hold. Keep in step with collar.py. */
-const COLLAR = { pad: 10, close: 30, simplify: 25, minDeg: 45, chamfer: 40, maxPts: 30 };
+ * Cow room 40 m: a closing pass fills every dead-end pasture pocket narrower
+ * than 80 m. Fence line 25 m: edges straightened to 25 m, no corner sharper
+ * than 80 degrees on either side, at most 30 points per piece (long pieces are
+ * cut across their width like fence panels). Runs on every rancher edit so
+ * what you see is the shape a collar can hold. Keep in step with collar.py. */
+const COLLAR = { close: 40, simplify: 25, minDeg: 80, chamfer: 40, maxPts: 30, laneHalf: 20 };
 
 function _toLocal(coords, o) {
   const kx = 111320 * Math.cos(o[1] * Math.PI / 180), ky = 110540;
@@ -844,7 +845,7 @@ function _simplifyRingM(ring, tol) {
 }
 function _fixCornersM(ring) {
   ring = _ccw(_simplifyRingM(ring, 3));
-  for (let pass = 0; pass < 6; pass++) {
+  for (let pass = 0; pass < 10; pass++) {
     if (ring.length < 3) break;
     const n = ring.length, out = [];
     let changed = false;
@@ -873,22 +874,37 @@ function _fixCornersM(ring) {
   }
   return ring;
 }
+// Cut across the width: enter perpendicular to one edge, leave as close to
+// perpendicular as possible on the far side, so the seam corners stay wide.
 function _cutLineM(ring) {
-  const n = ring.length, step = Math.max(1, Math.floor(n / 16)), far = Math.max(3, Math.floor(n / 4));
+  const n = ring.length;
+  if (n < 6) return null;
   let best = null;
-  for (let i = 0; i < n; i += step) {
-    const P = ring[i];
+  for (let i = 0; i < n; i++) {
+    const A = ring[i], B = ring[(i + 1) % n];
+    const ex = B[0] - A[0], ey = B[1] - A[1], L = Math.hypot(ex, ey);
+    if (L < 10) continue;
+    const P = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+    const nx = -ey / L, ny = ex / L;                 // inward normal (CCW)
+    let hit = null;
     for (let j = 0; j < n; j++) {
-      const di = Math.min(((j - i) % n + n) % n, ((i - j) % n + n) % n);
-      if (di < far) continue;
-      const A = ring[j], B = ring[(j + 1) % n];
-      const vx = B[0] - A[0], vy = B[1] - A[1], L2 = vx * vx + vy * vy;
-      let t = L2 ? ((P[0] - A[0]) * vx + (P[1] - A[1]) * vy) / L2 : 0;
-      t = Math.max(0, Math.min(1, t));
-      const Q = [A[0] + vx * t, A[1] + vy * t];
-      const d = Math.hypot(P[0] - Q[0], P[1] - Q[1]);
-      if (!best || d < best.d) best = { d, A: P, B: Q };
+      const gap = Math.min(((j - i) % n + n) % n, ((i - j) % n + n) % n);
+      if (gap < 3) continue;
+      const Aj = ring[j], Bj = ring[(j + 1) % n];
+      const fx = Bj[0] - Aj[0], fy = Bj[1] - Aj[1];
+      const den = fx * ny - fy * nx;
+      if (Math.abs(den) < 1e-9) continue;
+      const dx = Aj[0] - P[0], dy = Aj[1] - P[1];
+      const s = (dx * fy - dy * fx) / den, u = (dx * ny - dy * nx) / den;
+      if (s > 5 && u >= 0 && u <= 1 && (!hit || s < hit.s)) {
+        const Lj = Math.hypot(fx, fy);
+        const dev = Math.abs(90 - Math.acos(Math.min(1, Math.abs((nx * fx + ny * fy) / Lj))) * 180 / Math.PI);
+        hit = { s, dev };
+      }
     }
+    if (!hit) continue;
+    const score = hit.s * (1 + hit.dev / 30);
+    if (!best || score < best.score) best = { score, A: P, B: [P[0] + nx * hit.s, P[1] + ny * hit.s] };
   }
   return best;
 }
@@ -913,7 +929,6 @@ function _splitMaxM(ring, depth) {
   }
   let cut = _cutLineM(ring);
   if (!cut) {
-    // fallback: through the middle, across the longer side of the bbox
     const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
     const wide = (Math.max(...xs) - Math.min(...xs)) >= (Math.max(...ys) - Math.min(...ys));
@@ -943,8 +958,7 @@ function _splitMaxM(ring, depth) {
 function collarizeFeature(f) {
   let g;
   try {
-    g = turf.buffer(f, COLLAR.pad, { units: 'meters', steps: 2 });
-    g = g && turf.buffer(g, COLLAR.close, { units: 'meters', steps: 2 });
+    g = turf.buffer(f, COLLAR.close, { units: 'meters', steps: 2 });   // cow room: fill pockets < 80 m
     g = g && turf.buffer(g, -COLLAR.close, { units: 'meters', steps: 2 });
   } catch (e) { g = null; }
   if (!g) return [f];
@@ -968,14 +982,48 @@ function collarizeFeature(f) {
   });
 }
 
+// Road lanes are kept as they were unless you painted over the road: any
+// lane ground the shaping ADDED (not the rancher) is opened again.
+function _reopenLanes(piece, before) {
+  const roads = (regionData[currentRegion].roads || { features: [] }).features;
+  let out = piece;
+  for (const rd of roads) {
+    try {
+      if (!turf.booleanIntersects(out, rd)) continue;
+      const lane = turf.buffer(rd, COLLAR.laneHalf, { units: 'meters', steps: 2 });
+      let added = turf.difference(turf.featureCollection([lane, before]));
+      if (!added) continue;
+      const cut = turf.difference(turf.featureCollection([out, added]));
+      if (cut) out = Object.assign(cut, { properties: out.properties });
+    } catch (e) { /* keep as is */ }
+  }
+  return out;
+}
+
 // Replace one feature in the region's list with its collar-ready pieces.
-function snapFeatureToCollar(fid) {
+// Returns { pieces, changed } where changed = the drawing moved noticeably.
+function snapFeatureToCollar(fid, opts) {
+  opts = opts || {};
   const d = regionData[currentRegion];
   const idx = d.exclusion.features.findIndex(x => x.properties.id === fid);
-  if (idx < 0) return [];
-  const pieces = collarizeFeature(d.exclusion.features[idx]);
+  if (idx < 0) return { pieces: [], changed: false };
+  const before = d.exclusion.features[idx];
+  const areaBefore = turf.area(before);
+  let pieces = collarizeFeature(before);
+  if (opts.keepLanes !== false) pieces = pieces.map(p => _reopenLanes(p, before));
+  // narrow flag, same test as the pipeline: nothing left after a 12.5 m erosion
+  for (const p of pieces) {
+    const e = p.properties.enforce;
+    if (e === 'ok' || e === 'narrow' || e === undefined) {
+      let thin = false;
+      try { thin = !turf.buffer(p, -12.5, { units: 'meters', steps: 2 }); } catch (err) { thin = false; }
+      p.properties.enforce = thin ? 'narrow' : 'ok';
+    }
+  }
+  const areaAfter = pieces.reduce((s, p) => s + turf.area(p), 0);
+  const changed = Math.abs(areaAfter - areaBefore) > 0.08 * Math.max(areaBefore, 1) + 400;
   d.exclusion.features.splice(idx, 1, ...pieces);
-  return pieces;
+  return { pieces, changed };
 }
 
 function persistSeasonEdit(region) {
@@ -1013,6 +1061,9 @@ function widenFeature(fid, quiet) {
   f.properties.enforce = 'widened';
   f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
   snapFeatureToCollar(fid);
+  for (const p of regionData[currentRegion].exclusion.features) {
+    if (p.properties.id === fid || p.properties.id.startsWith(fid + '-')) p.properties.enforce = 'widened';
+  }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
@@ -1564,13 +1615,13 @@ function wireBoundaryEditing() {
     const d = regionData[currentRegion];
     // every zone you touched snaps to the collar shape rules (pad, straight
     // edges, no sharp corners, 30 points max). New panels inherit "touched".
-    let snapped = 0;
+    let adjusted = 0;
     for (const fid of Array.from(editTouchedIds)) {
       const f = d.exclusion.features.find(x => x.properties.id === fid);
       if (!f || f.properties.enforce === 'irrigated' || f.properties.enforce === 'too_small') continue;
-      const pieces = snapFeatureToCollar(fid);
-      for (const p of pieces) editTouchedIds.add(p.properties.id);
-      snapped += 1;
+      const res = snapFeatureToCollar(fid);
+      for (const p of res.pieces) editTouchedIds.add(p.properties.id);
+      if (res.changed) adjusted += 1;
     }
     try {
       localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
@@ -1601,7 +1652,7 @@ function wireBoundaryEditing() {
     if (zone) showExclusionCard(zone.properties);
     toast(changedEstablished
       ? 'This zone changed. Mark it established again when it looks right.'
-      : (snapped ? 'Saved. Edges snapped to collar rules.' : 'Changes saved.'));
+      : (adjusted ? 'Saved. Your shape was adjusted to collar rules.' : 'Changes saved.'));
   };
 
   // One finger paints. TWO fingers move the map (so wide riparian areas can
