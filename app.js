@@ -544,7 +544,7 @@ function showExclusionCard(props) {
   }
   const isGuard = !!props.spring_guard;
   const est = props.established === '2026';
-  const lifecycle = (!narrowNote && ['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard);
+  const lifecycle = (['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard);
   const edited = !!props._edited;
   const badge = lifecycle
     ? (est ? '<span class="zone-badge gold">Established 2026</span>'
@@ -619,11 +619,25 @@ function setEnforce(fid, val, msg, quiet) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f) return;
   f.properties.enforce = val;
-  if (val === 'included') snapFeatureToCollar(fid);   // shape a collar can hold, lanes kept
+  if (val === 'included') {
+    // shape a collar can hold, lanes kept; remember the raw outline so
+    // "Remove again" can put it back exactly
+    f.properties._origGeom = f.geometry;
+    snapFeatureToCollar(fid);
+  } else if (val === 'irrigated' && f.properties._origGeom) {
+    const d = regionData[currentRegion];
+    d.exclusion.features = d.exclusion.features.filter(x => !x.properties.id.startsWith(fid + '-'));
+    f.geometry = f.properties._origGeom;
+    delete f.properties._origGeom;
+    delete f.properties.pts;
+    delete f.properties.established;
+    f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
-  showExclusionCard(f.properties);
+  const shown = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid) || f;
+  showExclusionCard(shown.properties);
   toast(msg);
 }
 
