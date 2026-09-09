@@ -5,15 +5,18 @@
  */
 'use strict';
 
-const VERSION = 'rip-mockup-v53';
+const VERSION = 'rip-mockup-v54';
+// Bump ?v= in index.html together with VERSION: GitHub Pages caches every
+// file for 10 minutes, so a new page must ask for its own code by a new URL.
+const V = '54';
 const SHELL_CACHE = VERSION + '-shell';
 const TILE_CACHE = VERSION + '-tiles';
 
 const SHELL = [
   './',
   'index.html',
-  'style.css',
-  'app.js',
+  'style.css?v=' + V,
+  'app.js?v=' + V,
   'config.js',
   'manifest.webmanifest'
 ];
@@ -32,10 +35,13 @@ for (const root of ['data', 'stub-data']) {
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(SHELL_CACHE);
-    await cache.addAll(SHELL);
+    // cache: 'reload' skips the browser's HTTP cache, so a new version never
+    // precaches files the browser is still holding from the old one
+    const fresh = (u) => new Request(u, { cache: 'reload' });
+    await cache.addAll(SHELL.map(fresh));
     // Data files may not all exist yet (real data drops in later) — cache each
     // one individually and ignore misses.
-    await Promise.allSettled(DATA_URLS.map(u => cache.add(u).catch(() => {})));
+    await Promise.allSettled(DATA_URLS.map(u => cache.add(fresh(u)).catch(() => {})));
     self.skipWaiting();
   })());
 });
