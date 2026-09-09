@@ -588,6 +588,10 @@ function showExclusionCard(props) {
     secondary = '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
   }
   const reachLine = ' &middot; ' + (reach.length > 1 ? reachAcres(reach).toLocaleString() + ' acres' : (acres ? acres + ' acres' : ''));
+  // private land only: one quiet line, no colors on the map, no nudge to draw bigger
+  const nrcsLine = (lifecycle && reach.length && onPrivateLand(reach[0]))
+    ? `<button id="ex-nrcs" class="nrcs-line">Potential NRCS funding: ${nrcsLineText(reach)}<small>Codes 528 + 472, if it qualifies. Tap for the math.</small></button>`
+    : '';
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     `<p class="card-kicker">${isGuard ? 'Spring guard' : 'Exclusion zone'}</p>` +
@@ -604,8 +608,10 @@ function showExclusionCard(props) {
     (attrs.length ? '<br>This piece: ' + attrs.join('; ') + '.' : '') +
     (props.source ? '<br>Source tag: ' + esc(props.source) : '') + '</p></details>' +
     narrowNote +
-    primary + secondary + links;
+    primary + secondary + nrcsLine + links;
   $('.card-close').onclick = showHintCard;
+  const nbtn = $('#ex-nrcs');
+  if (nbtn) nbtn.onclick = () => openNrcsSheet(props.id);
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
   const wbtn = $('#ex-widen-btn');
   if (wbtn) wbtn.onclick = () => widenFeature(props.id);
@@ -1095,6 +1101,62 @@ function snapFeatureToCollar(fid, opts) {
   const changed = Math.abs(areaAfter - areaBefore) > 0.08 * Math.max(areaBefore, 1) + 400;
   d.exclusion.features.splice(idx, 1, ...pieces);
   return { pieces, changed };
+}
+
+/* ---------------- Potential NRCS funding (private land only) ----------------
+   Two NRCS practice codes a private landowner could be paid under, from the
+   Montana payment schedule as read by Erica Paddock (NRCS Dillon) on 9 Sep 2026:
+   528 Prescribed Grazing, high-production deferment, $49.25 an acre a year;
+   472 Access Control, $0.15 a foot of fence a year. Paid until the creek
+   recovers, 5 years at most; we show a 3 year contract. Nothing here is a
+   promise. Public land (BLM, State, USFS, USFWS) never qualifies. */
+const NRCS = { acreRate: 49.25, footRate: 0.15, years: 3 };
+const PUBLIC_OWNERS = /^(BLM|State|USFS|USFWS|Forest|Fish|Tribal|NPS|BOR)/i;
+function onPrivateLand(f) {
+  const own = regionData[currentRegion] && regionData[currentRegion].ownership;
+  if (!own || !f) return true;
+  let pt;
+  try { pt = turf.pointOnFeature(f); } catch (e) { return true; }
+  for (const o of own.features) {
+    if (!PUBLIC_OWNERS.test(o.properties.name || '')) continue;
+    try { if (turf.booleanPointInPolygon(pt, o)) return false; } catch (e) {}
+  }
+  return true;
+}
+// feet of fence around a set of panels: shared seams count once
+function fenceFeet(feats) {
+  let merged = null;
+  if (feats.length === 1) merged = feats[0];
+  else { try { merged = turf.union(turf.featureCollection(feats)); } catch (e) { merged = null; } }
+  const list = merged ? [merged] : feats;
+  let m = 0;
+  for (const f of list) { try { m += turf.length(turf.polygonToLine(f), { units: 'kilometers' }) * 1000; } catch (e) {} }
+  return Math.round(m * 3.28084);
+}
+function nrcsEstimate(feats) {
+  const ac = feats.reduce((s, f) => s + (f.properties.acres || 0), 0);
+  const ft = fenceFeet(feats);
+  const a528 = ac * NRCS.acreRate, a472 = ft * NRCS.footRate;
+  return { ac, ft, a528, a472, perYear: a528 + a472, total: (a528 + a472) * NRCS.years };
+}
+function fmtMoney(n, step) { return '$' + (Math.round(n / step) * step).toLocaleString(); }
+function nrcsLineText(feats) { return 'about ' + fmtMoney(nrcsEstimate(feats).perYear, 100) + ' a year'; }
+function openNrcsSheet(fid) {
+  const reach = reachOf(fid);
+  if (!reach.length) return;
+  const e = nrcsEstimate(reach);
+  const miles = (e.ft / 5280).toFixed(1);
+  $('#nrcs-body').innerHTML =
+    `<div class="nrcs-row"><span>Exclusion</span><b>${Math.round(e.ac).toLocaleString()} acres</b></div>` +
+    `<div class="nrcs-row"><span>Edge to fence</span><b>${e.ft.toLocaleString()} ft (${miles} mi)</b></div>` +
+    `<div class="nrcs-row"><span>Code 528, rest the ground, $49.25 an acre</span><b>${fmtMoney(e.a528, 10)} a year</b></div>` +
+    `<div class="nrcs-row"><span>Code 472, fence it, 15 cents a foot</span><b>${fmtMoney(e.a472, 10)} a year</b></div>` +
+    `<div class="nrcs-row total"><span>Both codes</span><b>${fmtMoney(e.perYear, 100)} a year</b></div>` +
+    `<div class="nrcs-row total"><span>Over a 3 year contract</span><b>${fmtMoney(e.total, 1000)}</b></div>` +
+    '<p class="sheet-sub" style="margin-top:10px">Private land only. Paid each year until the creek recovers, 5 years at most. ' +
+    'Whether the two codes can be paid together is still being checked with the state office. Nothing is promised until your NRCS office signs off.</p>';
+  openSheet($('#nrcs-sheet'));
+  $('#nrcs-close').onclick = closeSheets;
 }
 
 /* ---------------- Grazing days ----------------
@@ -2001,6 +2063,7 @@ function closeSheets() {
   $('#areas-sheet').hidden = true;
   $('#info-sheet').hidden = true;
   const gs = $('#graze-sheet'); if (gs) gs.hidden = true;
+  const ns = $('#nrcs-sheet'); if (ns) ns.hidden = true;
   if (scrimEl) { scrimEl.remove(); scrimEl = null; }
   if (!editMode) $('#bottom-row').style.display = '';
 }
@@ -2069,12 +2132,12 @@ function wireUI() {
 }
 
 const INTRO_STEPS = [
-  { title: 'Take advantage of the AUMs you paid for',
+  { title: 'On public land, take advantage of the AUMs you paid for',
     body: 'It is common for permittees to max out a riparian zone after just a few days and be moved off an allotment a month before their permit called for it, while high quality upland forage goes to waste. Collars hold cows off the creek so the herd spreads out and you stay the days you are authorized.' },
-  { title: 'Blue areas are proposed riparian exclusions',
-    body: 'They are proposals, not final lines. We draw them from three public data sets: 40 years of satellite greenness from the University of Montana, federal river and wetland maps from USGS and Fish and Wildlife, and an irrigation map so watered hay ground stays out. You know this land better than any satellite.' },
+  { title: 'On private land, NRCS may pay for the exclusion',
+    body: 'For a 300 acre riparian exclusion with 10 miles of edge, two NRCS codes could add up to about $22,700 a year, or about $68,000 over a 3 year contract. Code 528 pays $49.25 an acre to rest the ground. Code 472 pays 15 cents a foot of fence (usually polywire), and a collar line may count. Payments run until the creek recovers, 5 years at most.' },
   { title: 'Approve exclusions and add water gaps',
-    body: '&bull; Tap a blue area to fix its shape, then mark it established for the season.<br>&bull; Tap the Water gap button to add a spot where cows walk in to drink.<br>&bull; Tap Check spots to see places where the data disagrees with itself. We may have those wrong.' }
+    body: 'The blue areas are proposals, not final lines. You know this land better than any satellite.<br>&bull; Tap a blue area to fix its shape, then mark it established for the season.<br>&bull; Tap the Water gap button to add a spot where cows walk in to drink.<br>&bull; Tap Check spots to see places where the data disagrees with itself. We may have those wrong.' }
 ];
 let introIdx = 0;
 
@@ -2123,11 +2186,12 @@ function openAreasSheet(section) {
     for (const r of reach) seen.add(r.properties.id);
     const on = p.graze_on && grazeActive(p);
     const status = on ? ` &middot; Grazing allowed &middot; ${grazeDaysLeft(p)} day${grazeDaysLeft(p) === 1 ? '' : 's'} left` : '';
+    const nrcs = onPrivateLand(f) ? ` &middot; NRCS ${nrcsLineText(reach)}` : '';
     const action = on
       ? `<button class="area-act" data-close="${esc(p.id)}">Close grazing</button>`
       : `<button class="area-act" data-graze="${esc(p.id)}">Graze</button>`;
     reachRows.push(`<div class="area-row-wrap"><button class="area-row" data-fid="${esc(p.id)}">` +
-      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}</small></span></button>${action}</div>`);
+      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}${nrcs}</small></span></button>${action}</div>`);
   }
   const extraRows = mine.filter(f => f.properties.established !== '2026').map(f => {
     const p = f.properties;
@@ -2274,14 +2338,29 @@ function wireMapClicks() {
 /* ---------------- Boot ---------------- */
 
 async function boot() {
+  if (window.__bundleProtocol && !window.__bundleProtocolOn) {
+    // demo file: photos and fonts come from inside the page
+    maplibregl.addProtocol('bundle', window.__bundleProtocol);
+    window.__bundleProtocolOn = true;
+  }
+  if (window.__DEMO) {
+    // one-window demo (chat artifact): one region, framed on the window
+    currentRegion = window.__DEMO.region;
+    for (const k of Object.keys(REGIONS)) if (k !== currentRegion) delete REGIONS[k];
+    REGIONS[currentRegion].center = window.__DEMO.center;
+    REGIONS[currentRegion].zoom = window.__DEMO.zoom;
+    delete REGIONS[currentRegion].bounds;                 // no fit-to-whole-region: stay on the window
+    REGIONS[currentRegion].detail = { center: window.__DEMO.center, zoom: window.__DEMO.zoom };
+    const pill = $('#region-pill'); if (pill) pill.style.display = 'none';
+  }
   const r = REGIONS[currentRegion];
   // demo bundle mode: aerial photos (USDA NAIP, public domain) and fonts are
   // served from the imported file through the "bundle://" protocol
   const bundleStyle = window.__BUNDLE ? {
     version: 8,
     glyphs: 'bundle://glyphs/{fontstack}/{range}.pbf',
-    sources: { naip: { type: 'raster', tiles: ['bundle://tiles/{z}/{x}/{y}'], tileSize: 256, minzoom: 11, maxzoom: 17, attribution: 'USDA NAIP via USGS' } },
-    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#2b2f28' } }, { id: 'naip', type: 'raster', source: 'naip' }]
+    sources: { naip: { type: 'raster', tiles: ['bundle://tiles/{z}/{x}/{y}'], tileSize: 256, minzoom: 11, maxzoom: window.__DEMO ? 18 : 17, attribution: 'USDA NAIP via USGS' } },
+    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#8a8368' } }, { id: 'naip', type: 'raster', source: 'naip' }]
   } : null;
   map = new maplibregl.Map({
     container: 'map',
@@ -2304,7 +2383,14 @@ async function boot() {
   geolocate.on('error', () => toast('Could not find your spot. Check that this page is allowed to use your location.'));
 
   // Load both regions up front (small files; also warms the offline cache).
-  const dataReady = Promise.all([loadRegion('red-canyon'), loadRegion('bear-lake')]);
+  const dataReady = window.__DEMO ? loadRegion(currentRegion) : Promise.all([loadRegion('red-canyon'), loadRegion('bear-lake')]);
+  if (window.__DEMO) {
+    // keep the demo near its window, but leave room so a wide desktop view
+    // at the opening zoom still fits inside the limit
+    const b = window.__DEMO.bounds;
+    map.setMaxBounds([[b[0] - 0.06, b[1] - 0.04], [b[2] + 0.06, b[3] + 0.04]]);
+    map.setMinZoom(13);
+  }
 
   // Run setup when the style is ready. Uses both the 'load' event and a poll:
   // in a throttled/background tab the 'load' event can stall even though the
