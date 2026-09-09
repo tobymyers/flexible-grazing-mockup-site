@@ -24,7 +24,8 @@ const REGIONS = {
   'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
                   detail: { center: [-111.392, 42.124], zoom: 15.1 } },
   'holland':    { label: 'Big Hole (Holland)', center: [-113.03, 45.29], zoom: 11.6,
-                  detail: { center: [-112.985, 45.225], zoom: 14.8 } },
+                  // opens on Reservoir Creek (Custodial + AMP), the allotment the demo uses
+                  detail: { center: [-113.080, 45.158], zoom: 13.6 } },
   'martinell':  { label: 'Centennial (Martinell)', center: [-111.82, 44.71], zoom: 12.0,
                   detail: { center: [-111.79, 44.72], zoom: 14.5 } }
 };
@@ -590,7 +591,7 @@ function showExclusionCard(props) {
   const reachLine = ' &middot; ' + (reach.length > 1 ? reachAcres(reach).toLocaleString() + ' acres' : (acres ? acres + ' acres' : ''));
   // private land only: one quiet line, no colors on the map, no nudge to draw bigger
   const nrcsLine = (lifecycle && reach.length && onPrivateLand(reach[0]))
-    ? `<button id="ex-nrcs" class="nrcs-line">Potential NRCS funding: ${nrcsLineText(reach)}<small>Codes 528 + 472, if it qualifies. Tap for the math.</small></button>`
+    ? `<button id="ex-nrcs" class="nrcs-line"><span>Potential NRCS funding: ${nrcsLineText(reach)}<small>Codes 528 + 472</small></span><i class="chev">&#8250;</i></button>`
     : '';
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
@@ -1140,21 +1141,21 @@ function nrcsEstimate(feats) {
   return { ac, ft, a528, a472, perYear: a528 + a472, total: (a528 + a472) * NRCS.years };
 }
 function fmtMoney(n, step) { return '$' + (Math.round(n / step) * step).toLocaleString(); }
-function nrcsLineText(feats) { return 'about ' + fmtMoney(nrcsEstimate(feats).perYear, 100) + ' a year'; }
+function nrcsLineText(feats) { return 'approx. ' + fmtMoney(nrcsEstimate(feats).perYear, 100) + ' / year'; }
 function openNrcsSheet(fid) {
   const reach = reachOf(fid);
   if (!reach.length) return;
   const e = nrcsEstimate(reach);
   const miles = (e.ft / 5280).toFixed(1);
   $('#nrcs-body').innerHTML =
-    `<div class="nrcs-row"><span>Exclusion</span><b>${Math.round(e.ac).toLocaleString()} acres</b></div>` +
-    `<div class="nrcs-row"><span>Edge to fence</span><b>${e.ft.toLocaleString()} ft (${miles} mi)</b></div>` +
-    `<div class="nrcs-row"><span>Code 528, rest the ground, $49.25 an acre</span><b>${fmtMoney(e.a528, 10)} a year</b></div>` +
-    `<div class="nrcs-row"><span>Code 472, fence it, 15 cents a foot</span><b>${fmtMoney(e.a472, 10)} a year</b></div>` +
-    `<div class="nrcs-row total"><span>Both codes</span><b>${fmtMoney(e.perYear, 100)} a year</b></div>` +
-    `<div class="nrcs-row total"><span>Over a 3 year contract</span><b>${fmtMoney(e.total, 1000)}</b></div>` +
-    '<p class="sheet-sub" style="margin-top:10px">Private land only. Paid each year until the creek recovers, 5 years at most. ' +
-    'Whether the two codes can be paid together is still being checked with the state office. Nothing is promised until your NRCS office signs off.</p>';
+    `<p class="nrcs-lead">approx. ${fmtMoney(e.perYear, 100)} / year for up to ${NRCS.years} years</p>` +
+    `<div class="nrcs-row"><span>Riparian exclusion</span><b>${Math.round(e.ac).toLocaleString()} acres</b></div>` +
+    `<div class="nrcs-row"><span>Virtual fence line</span><b>${e.ft.toLocaleString()} ft (${miles} mi)</b></div>` +
+    `<div class="nrcs-row"><span>528 Prescribed Grazing<small>Livestock deferment, high production &middot; $49.25 / acre</small></span><b>${fmtMoney(e.a528, 10)} / year</b></div>` +
+    `<div class="nrcs-row"><span>472 Access Control<small>Temporary fence, paid by length &middot; $0.15 / ft</small></span><b>${fmtMoney(e.a472, 10)} / year</b></div>` +
+    '<p class="sheet-sub nrcs-note">Paid each year until the creek recovers, likely 3 years maximum. ' +
+    'In Montana this likely applies to private land only. ' +
+    'Whether 528 can be used for both virtual fence and a riparian exclusion is being checked with the state office.</p>';
   openSheet($('#nrcs-sheet'));
   $('#nrcs-close').onclick = closeSheets;
 }
