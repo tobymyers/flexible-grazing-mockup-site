@@ -43,6 +43,10 @@ let geolocate;
 /* ---------------- Data loading ---------------- */
 
 async function fetchLayer(region, layer) {
+  // demo bundle mode (chat-only artifact): data comes from the imported file
+  if (window.__BUNDLE && window.__BUNDLE.data && window.__BUNDLE.data[region] && window.__BUNDLE.data[region][layer]) {
+    return JSON.parse(JSON.stringify(window.__BUNDLE.data[region][layer]));
+  }
   for (const root of [DATA_ROOT, STUB_ROOT]) {
     try {
       const res = await fetch(`${root}/${region}/${layer}.geojson`);
@@ -208,7 +212,7 @@ function firstSymbolFont() {
     if (reg) return [reg];
     if (found.length) return [found[0]];
   } catch (e) { /* fall through */ }
-  return ['Arial Regular'];
+  return [window.__BUNDLE ? 'Open Sans Regular' : 'Arial Regular'];
 }
 
 function addSourcesAndLayers() {
@@ -2271,9 +2275,17 @@ function wireMapClicks() {
 
 async function boot() {
   const r = REGIONS[currentRegion];
+  // demo bundle mode: aerial photos (USDA NAIP, public domain) and fonts are
+  // served from the imported file through the "bundle://" protocol
+  const bundleStyle = window.__BUNDLE ? {
+    version: 8,
+    glyphs: 'bundle://glyphs/{fontstack}/{range}.pbf',
+    sources: { naip: { type: 'raster', tiles: ['bundle://tiles/{z}/{x}/{y}'], tileSize: 256, minzoom: 11, maxzoom: 17, attribution: 'USDA NAIP via USGS' } },
+    layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#2b2f28' } }, { id: 'naip', type: 'raster', source: 'naip' }]
+  } : null;
   map = new maplibregl.Map({
     container: 'map',
-    style: BASEMAP_STYLE,
+    style: bundleStyle || BASEMAP_STYLE,
     center: r.center,
     zoom: r.zoom,
     attributionControl: { compact: true }
@@ -2340,7 +2352,7 @@ async function boot() {
   showHintCard();
   document.querySelector('#region-menu .menu-item[data-region="red-canyon"]').classList.add('current');
 
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  if (!window.__BUNDLE && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(err =>
       console.warn('Service worker registration failed:', err));
   }
