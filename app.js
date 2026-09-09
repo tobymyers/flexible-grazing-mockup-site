@@ -2482,7 +2482,8 @@ async function boot() {
   geolocate.on('error', () => toast('Could not find your spot. Check that this page is allowed to use your location.'));
 
   // Load both regions up front (small files; also warms the offline cache).
-  const dataReady = window.__DEMO ? loadRegion(currentRegion) : Promise.all([loadRegion('red-canyon'), loadRegion('bear-lake')]);
+  // the starting region must be loaded before setup; the others load on switch
+  const dataReady = loadRegion(currentRegion);
   if (window.__DEMO) {
     // keep the demo near its window, but leave room so a wide desktop view
     // at the opening zoom still fits inside the limit
@@ -2536,6 +2537,7 @@ async function boot() {
   wireUI();
   showHintCard();
   document.querySelector('#region-menu .menu-item[data-region="' + currentRegion + '"]').classList.add('current');
+  $('#region-name').textContent = REGIONS[currentRegion].label;
 
   if (!window.__BUNDLE && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(err =>
