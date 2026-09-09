@@ -570,12 +570,12 @@ function showExclusionCard(props) {
   let primary = '', secondary = '', links = '';
   if (lifecycle) {
     if (grazing) {
-      primary = '<div class="gap-toggle"><button id="ex-graze-off" class="sel-open">Close grazing</button></div>';
-      secondary = '<div class="gap-toggle"><button id="ex-edit-btn">Adjust boundary</button></div>';
+      // grazing is opened and closed from My areas; the card only shows it
+      primary = '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
+      links = '<p class="card-sub">Open and close grazing from My areas.</p>';
     } else if (est) {
       primary = '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>';
-      links = '<button id="ex-graze-on" class="link-btn">Allow grazing for a few days</button>' +
-              '<button id="ex-unest-btn" class="link-btn">Un-mark established</button>';
+      links = '<button id="ex-unest-btn" class="link-btn">Un-mark established</button>';
     } else {
       primary = '<div class="gap-toggle"><button id="ex-est-btn" class="sel-open">Mark established for 2026</button></div>';
       secondary = '<div class="gap-toggle"><button id="ex-edit-btn">Adjust boundary</button></div>';
@@ -619,8 +619,6 @@ function showExclusionCard(props) {
   if (ubtn2) ubtn2.onclick = () => setEstablished(props.id, null, 'Un-marked.');
   const gon = $('#ex-graze-on');
   if (gon) gon.onclick = () => openGrazeSheet(props.id);
-  const goff = $('#ex-graze-off');
-  if (goff) goff.onclick = () => closeGrazing(props.id);
 }
 
 function setEstablished(fid, val, msg) {
@@ -1157,7 +1155,7 @@ function allowGrazing(fid, days) {
   }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
-  showExclusionCard(reach.find(x => x.properties.id === fid).properties);
+  if (!$('#areas-sheet').hidden) openAreasSheet(); else showExclusionCard(reach.find(x => x.properties.id === fid).properties);
   toast('Grazing allowed \u00b7 ' + days + ' days.');
 }
 // small chooser: 5 days this year, or 30 days one year in three
@@ -1168,9 +1166,11 @@ function openGrazeSheet(fid) {
   const b30 = $('#graze-30');
   b30.disabled = !!nx;
   b30.querySelector('small').textContent = nx ? `Grazed ${nx.last} \u00b7 next ${nx.next}` : 'Rest the other two years';
-  $('#graze-5').onclick = () => { closeSheets(); allowGrazing(fid, 5); };
-  b30.onclick = () => { if (!nx) { closeSheets(); allowGrazing(fid, 30); } };
-  $('#graze-cancel').onclick = () => { closeSheets(); };
+  const back = !$('#areas-sheet').hidden;
+  const done = (days) => { closeSheets(); if (back) openSheet($('#areas-sheet')); allowGrazing(fid, days); };
+  $('#graze-5').onclick = () => done(5);
+  b30.onclick = () => { if (!nx) done(30); };
+  $('#graze-cancel').onclick = () => { closeSheets(); if (back) openSheet($('#areas-sheet')); };
   openSheet($('#graze-sheet'));
 }
 function closeGrazing(fid, quiet) {
@@ -1185,7 +1185,7 @@ function closeGrazing(fid, quiet) {
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (quiet) return;
-  showExclusionCard(f.properties);
+  if (!$('#areas-sheet').hidden) openAreasSheet(); else showExclusionCard(f.properties);
   toast('Grazing closed.');
 }
 // on load: windows whose days are over close themselves
@@ -1978,8 +1978,8 @@ function wireUI() {
 }
 
 const INTRO_STEPS = [
-  { title: 'Keeping cows out of creek bottoms is hard',
-    body: 'Riparian areas are important, contentious, and difficult to manage. Keeping cows off them takes miles of fence or a lot of riding. Virtual fence collars can do that work.' },
+  { title: 'Take advantage of the AUMs you paid for',
+    body: 'It is common for permittees to max out a riparian zone after just a few days and be moved off an allotment a month before their permit called for it, while high quality upland forage goes to waste. Collars hold cows off the creek so the herd spreads out and you stay the days you are authorized.' },
   { title: 'Blue areas are proposed riparian exclusions',
     body: 'They are proposals, not final lines. We draw them from three public data sets: 40 years of satellite greenness from the University of Montana, federal river and wetland maps from USGS and Fish and Wildlife, and an irrigation map so watered hay ground stays out. You know this land better than any satellite.' },
   { title: 'Approve exclusions and add water gaps',
@@ -2030,10 +2030,13 @@ function openAreasSheet(section) {
     if (p.established !== '2026' || seen.has(p.id)) continue;
     const reach = reachOf(p.id);
     for (const r of reach) seen.add(r.properties.id);
-    const status = (p.graze_on && grazeActive(p))
-      ? ` &middot; Grazing allowed &middot; ${grazeDaysLeft(p)} day${grazeDaysLeft(p) === 1 ? '' : 's'} left` : '';
-    reachRows.push(`<button class="area-row" data-fid="${esc(p.id)}">` +
-      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}</small></span></button>`);
+    const on = p.graze_on && grazeActive(p);
+    const status = on ? ` &middot; Grazing allowed &middot; ${grazeDaysLeft(p)} day${grazeDaysLeft(p) === 1 ? '' : 's'} left` : '';
+    const action = on
+      ? `<button class="area-act" data-close="${esc(p.id)}">Close grazing</button>`
+      : `<button class="area-act" data-graze="${esc(p.id)}">Graze</button>`;
+    reachRows.push(`<div class="area-row-wrap"><button class="area-row" data-fid="${esc(p.id)}">` +
+      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}</small></span></button>${action}</div>`);
   }
   const extraRows = mine.filter(f => f.properties.established !== '2026').map(f => {
     const p = f.properties;
@@ -2077,6 +2080,8 @@ function openAreasSheet(section) {
       showExclusionCard(f.properties);
     };
   });
+  list.querySelectorAll('.area-act[data-graze]').forEach(btn => { btn.onclick = () => openGrazeSheet(btn.dataset.graze); });
+  list.querySelectorAll('.area-act[data-close]').forEach(btn => { btn.onclick = () => closeGrazing(btn.dataset.close); });
   list.querySelectorAll('.area-row[data-gid]').forEach(btn => {
     btn.onclick = () => {
       const f = myGaps.find(x => x.properties.id === btn.dataset.gid);
