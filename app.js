@@ -270,7 +270,7 @@ function addSourcesAndLayers() {
       // narrow fades; everything else solid blue
       'fill-color': '#6fb3e8',
       'fill-opacity': ['case',
-        ['==', ['get', 'graze_on'], true], 0,
+        ['==', ['get', 'graze_on'], true], 0.14,
         ['==', ['get', 'enforce'], 'too_small'], 0.12,
         ['==', ['get', 'enforce'], 'irrigated'], 0.12,
         ['==', ['get', 'enforce'], 'narrow'], 0.14,
@@ -293,30 +293,12 @@ function addSourcesAndLayers() {
     paint: { 'line-color': '#d9a03a', 'line-width': 3 }
   });
   // Grazing allowed: hatched amber over the zone, dashed amber edge
-  if (!map.hasImage('graze-hatch')) {
-    const cv = document.createElement('canvas');
-    cv.width = cv.height = 24;
-    const cx = cv.getContext('2d');
-    cx.clearRect(0, 0, 24, 24);
-    cx.strokeStyle = 'rgba(224, 168, 60, 0.9)';
-    cx.lineWidth = 3;
-    for (const o of [-24, -12, 0, 12, 24]) {
-      cx.beginPath(); cx.moveTo(o, 24); cx.lineTo(o + 24, 0); cx.stroke();
-    }
-    map.addImage('graze-hatch', cx.getImageData(0, 0, 24, 24));
-  }
-  // Grazing allowed: the fill is gone (it is pasture for now); the fence
-  // line stays as a hatched gold edge so the boundary is still readable.
-  map.addLayer({
-    id: 'exclusion-graze', type: 'line', source: 'exclusion',
-    filter: ['==', ['get', 'graze_on'], true],
-    layout: { 'line-join': 'round' },
-    paint: { 'line-pattern': 'graze-hatch', 'line-width': 12, 'line-opacity': 0.9 }
-  });
+  // Grazing allowed: lighter blue, and the fence line goes dashed gold,
+  // like a gate left open.
   map.addLayer({
     id: 'exclusion-graze-line', type: 'line', source: 'exclusion',
     filter: ['==', ['get', 'graze_on'], true],
-    paint: { 'line-color': '#e0a83c', 'line-width': 2 }
+    paint: { 'line-color': '#e0a83c', 'line-width': 3, 'line-dasharray': [2.2, 2.2] }
   });
   map.addSource('graze-labels', { type: 'geojson', data: grazeLabelFC(currentRegion) });
   map.addLayer({
@@ -1985,7 +1967,7 @@ function openSheet(el) {
 }
 
 const LAYER_GROUPS = {
-  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established', 'exclusion-graze', 'exclusion-graze-line', 'graze-label'],
+  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established', 'exclusion-graze-line', 'graze-label'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons', 'gap-name-label'],
   allotments: ['allotments-line', 'allotments-label'],
   ownership: ['ownership-fill', 'ownership-source-label'],
