@@ -157,11 +157,11 @@ function buildGapCollections(region) {
     const open = state[g.id] !== false;
     const props = { id: g.id, name: g.name || 'Water gap', width_m: g.width_m, open };
     const src = raw.find(x => x.properties.id === g.id);
-    if (src) { props.lane_ft = src.properties.lane_ft; props.lane_to = src.properties.lane_to; }
+    if (src) { props.lane_ft = src.properties.lane_ft; props.lane_to = src.properties.lane_to; props.shape = src.properties.shape; props.acres = src.properties.acres; }
     points.push({ type: 'Feature', properties: props, geometry: { type: 'Point', coordinates: g.center } });
     seals.push({ type: 'Feature', properties: props, geometry: g.sealGeom });
     // the far-end handle shows while placing or when the gap's card is open
-    if (props.lane_to && (g.id === 'user-pending' || g.id === selectedGapId)) {
+    if (props.lane_to && props.shape !== 'custom' && (g.id === 'user-pending' || g.id === selectedGapId)) {
       toes.push({ type: 'Feature', properties: { id: g.id }, geometry: { type: 'Point', coordinates: props.lane_to } });
     }
   }
@@ -1278,7 +1278,9 @@ function showGapCard(props) {
     '<p class="card-kicker">Water gap</p>' +
     `<p class="card-main">${esc(props.name || 'Water gap')}</p>` +
     `<p class="card-sub" id="gap-status">${open
-      ? (props.lane_ft
+      ? (props.shape === 'custom'
+        ? 'Open. Cows can walk in here to drink. Your shape' + (props.acres ? ', ' + props.acres + ' acres.' : '.')
+        : props.lane_ft
         ? 'Open. A ' + props.lane_ft + ' ft lane lets cows walk down to the water.'
         : 'Open. Cows can walk in here to drink. The gap is about 100 feet wide.')
       : 'Closed. Cows cannot reach the water here.'}</p>` +
@@ -1287,10 +1289,13 @@ function showGapCard(props) {
     `<button id="gap-close-btn" class="${open ? '' : 'sel-closed'}">Closed</button>` +
     '</div>' +
     (String(props.id).startsWith('user-')
-      ? '<div class="gap-toggle"><button id="gap-rename-btn">Rename</button></div>' +
+      ? '<div class="gap-toggle"><button id="gap-shape-btn" class="sel-open">Adjust shape</button></div>' +
+        '<div class="gap-toggle"><button id="gap-rename-btn">Rename</button></div>' +
         '<button id="gap-del-btn" class="gap-remove">Remove this gap</button>'
       : '');
   $('.card-close').onclick = showHintCard;
+  const shp = $('#gap-shape-btn');
+  if (shp) shp.onclick = () => enterBoundaryEdit(props.id);
   $('#gap-open-btn').onclick = () => setGap(props, true);
   $('#gap-close-btn').onclick = () => setGap(props, false);
   const del = $('#gap-del-btn');
@@ -1570,7 +1575,15 @@ function wireGapDragging() {
     const snapped = snapToBoundary(e.point, 120) || e.lngLat;
     const feat = regionData[currentRegion].water_gaps.features.find(
       x => x.properties.id === draggingGapId);
-    if (feat) {
+    if (feat && feat.properties.shape === 'custom') {
+      const from = feat.geometry.coordinates;
+      const dx = snapped.lng - from[0], dy = snapped.lat - from[1];
+      feat.geometry.coordinates = [snapped.lng, snapped.lat];
+      const plug = regionData[currentRegion].water_gaps.features.find(
+        x => x.properties.id === draggingGapId + '-plug');
+      if (plug) plug.geometry.coordinates = plug.geometry.coordinates.map(ring => ring.map(c => [c[0] + dx, c[1] + dy]));
+      refreshGapSources();
+    } else if (feat) {
       feat.geometry.coordinates = [snapped.lng, snapped.lat];
       const keepTo = feat.properties.lane_custom ? feat.properties.lane_to : undefined;
       const plugInfo = buildGapPlugGeometry([snapped.lng, snapped.lat], keepTo);
@@ -1656,6 +1669,7 @@ let strokeActive = false;
 let editUndoStack = [];
 let editEntrySnapshot = null;
 let editTouchedIds = new Set();
+let editGapId = null;        // set while the brush edits a water gap's shape
 
 function metersPerPixel() {
   const c = map.getCenter();
@@ -1697,6 +1711,30 @@ function applyStroke() {
   } catch (e) { return; }
 
   const d = regionData[currentRegion];
+  if (editGapId) {
+    // painting a water gap's shape: grow = more opening, shrink = close some up
+    editUndoStack.push(JSON.stringify(d.water_gaps.features));
+    if (editUndoStack.length > 20) editUndoStack.shift();
+    let plug = d.water_gaps.features.find(x => x.properties.id === editGapId + '-plug');
+    if (!plug) {
+      const seal = buildGapCollections(currentRegion).seals.features.find(x => x.properties.id === editGapId);
+      if (!seal) return;
+      plug = { type: 'Feature', properties: { id: editGapId + '-plug', name: seal.properties.name }, geometry: seal.geometry };
+      d.water_gaps.features.push(plug);
+    }
+    try {
+      const cur = { type: 'Feature', properties: {}, geometry: plug.geometry };
+      const out = editMode === 'add'
+        ? turf.union(turf.featureCollection([cur, swath]))
+        : turf.difference(turf.featureCollection([cur, swath]));
+      if (out) {
+        const big = turf.flatten(out).features.sort((x, y) => turf.area(y) - turf.area(x))[0];
+        if (big && turf.area(big) > 50) plug.geometry = big.geometry;
+      }
+    } catch (e) { /* keep the shape as it was */ }
+    refreshGapSources();
+    return;
+  }
   editUndoStack.push(JSON.stringify(d.exclusion.features));
   if (editUndoStack.length > 20) editUndoStack.shift();
 
@@ -1745,16 +1783,20 @@ function setEditMode(mode) {
   map.setPaintProperty('brush-stroke-line', 'line-color', mode === 'add' ? '#5aa9e8' : '#e8e4da');
 }
 
-function enterBoundaryEdit() {
+function enterBoundaryEdit(gapId) {
   if (editMode) return;
+  editGapId = (typeof gapId === 'string') ? gapId : null;
   if (map.getZoom() < 13.5) map.easeTo({ zoom: 14, essential: true });
   const d = regionData[currentRegion];
-  editEntrySnapshot = JSON.stringify(d.exclusion.features);
+  editEntrySnapshot = JSON.stringify(editGapId ? d.water_gaps.features : d.exclusion.features);
   editUndoStack = [];
   editTouchedIds = new Set();
   map.dragPan.disable();
   $('#edit-bar').hidden = false;
-  $('#card-body').parentElement.style.display = 'none';
+  $('#bottom-row').style.display = 'none';
+  $('#eb-add').textContent = editGapId ? 'Grow gap' : 'Grow exclusion';
+  $('#eb-erase').textContent = editGapId ? 'Shrink gap' : 'Shrink exclusion';
+  if (editGapId) selectedGapId = editGapId;
   setEditMode('add');
   updateBrushLabel();
   map.on('zoom', updateBrushLabel);
@@ -1769,7 +1811,13 @@ function exitBoundaryEdit() {
   map.dragPan.enable();
   map.off('zoom', updateBrushLabel);
   $('#edit-bar').hidden = true;
-  $('#card-body').parentElement.style.display = '';
+  $('#bottom-row').style.display = '';
+  const gid = editGapId;
+  editGapId = null;
+  if (gid) {
+    const pt = buildGapCollections(currentRegion).points.features.find(x => x.properties.id === gid);
+    if (pt) { showGapCard(pt.properties); return; }
+  }
   showHintCard();
 }
 
@@ -1779,23 +1827,59 @@ function wireBoundaryEditing() {
   $('#eb-undo').onclick = () => {
     const prev = editUndoStack.pop();
     if (!prev) { toast('Nothing to undo.'); return; }
-    regionData[currentRegion].exclusion.features = JSON.parse(prev);
+    if (editGapId) regionData[currentRegion].water_gaps.features = JSON.parse(prev);
+    else regionData[currentRegion].exclusion.features = JSON.parse(prev);
     refreshGapSources();
   };
   $('#eb-reset').onclick = () => {
     const d = regionData[currentRegion];
+    if (editGapId) {
+      editUndoStack.push(JSON.stringify(d.water_gaps.features));
+      d.water_gaps.features = JSON.parse(editEntrySnapshot);
+      refreshGapSources();
+      toast('Back to the shape you started with.');
+      return;
+    }
     editUndoStack.push(JSON.stringify(d.exclusion.features));
     d.exclusion.features = JSON.parse(JSON.stringify(d.exclusionPristine.features));
     refreshGapSources();
     toast('Back to the suggested boundary.');
   };
   $('#eb-cancel').onclick = () => {
-    regionData[currentRegion].exclusion.features = JSON.parse(editEntrySnapshot);
+    if (editGapId) regionData[currentRegion].water_gaps.features = JSON.parse(editEntrySnapshot);
+    else regionData[currentRegion].exclusion.features = JSON.parse(editEntrySnapshot);
     refreshGapSources();
     exitBoundaryEdit();
   };
   $('#eb-save').onclick = () => {
     const d = regionData[currentRegion];
+    if (editGapId) {
+      // the gap snaps to the same collar rules as a zone; one polygon only
+      const gid = editGapId;
+      const plug = d.water_gaps.features.find(x => x.properties.id === gid + '-plug');
+      const pt = d.water_gaps.features.find(x => x.properties.id === gid);
+      if (plug) {
+        const before = turf.area(plug);
+        const pieces = collarizeFeature({ type: 'Feature', properties: { id: gid + '-plug' }, geometry: plug.geometry });
+        const big = pieces.sort((x, y) => turf.area(y) - turf.area(x))[0];
+        if (big) plug.geometry = big.geometry;
+        const ac = Math.round(turf.area(plug) / 4046.8564 * 10) / 10;
+        if (pt) {
+          pt.properties.shape = 'custom';
+          pt.properties.acres = ac;
+          delete pt.properties.lane_ft; delete pt.properties.lane_to; delete pt.properties.lane_custom;
+          // keep the drop inside the shape
+          try { if (!turf.booleanPointInPolygon(pt, plug)) pt.geometry.coordinates = turf.pointOnFeature(plug).geometry.coordinates; } catch (e) {}
+        }
+        saveUserGaps(currentRegion);
+        refreshGapSources();
+        exitBoundaryEdit();
+        const moved = Math.abs(turf.area(plug) - before) > 0.08 * Math.max(before, 1) + 200;
+        toast(ac > 5 ? 'Saved. That is more pasture than a gap: ' + ac + ' acres.'
+          : (moved ? 'Saved. Your shape was adjusted to collar rules.' : 'Water gap saved.'));
+      } else exitBoundaryEdit();
+      return;
+    }
     // every zone you touched snaps to the collar shape rules (pad, straight
     // edges, no sharp corners, 30 points max). New panels inherit "touched".
     let adjusted = 0;
@@ -1915,6 +1999,7 @@ function closeSheets() {
   $('#info-sheet').hidden = true;
   const gs = $('#graze-sheet'); if (gs) gs.hidden = true;
   if (scrimEl) { scrimEl.remove(); scrimEl = null; }
+  if (!editMode) $('#bottom-row').style.display = '';
 }
 function openSheet(el) {
   closeSheets();
@@ -1922,6 +2007,9 @@ function openSheet(el) {
   scrimEl.id = 'scrim';
   scrimEl.onclick = closeSheets;
   document.body.appendChild(scrimEl);
+  // one bottom surface at a time: the card and the water-gap button step
+  // aside while a sheet is up, and come back when it closes
+  $('#bottom-row').style.display = 'none';
   el.hidden = false;
 }
 
