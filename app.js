@@ -270,7 +270,7 @@ function addSourcesAndLayers() {
       // narrow fades; everything else solid blue
       'fill-color': '#6fb3e8',
       'fill-opacity': ['case',
-        ['==', ['get', 'graze_on'], true], 0.14,
+        ['==', ['get', 'graze_on'], true], 0.2,
         ['==', ['get', 'enforce'], 'too_small'], 0.12,
         ['==', ['get', 'enforce'], 'irrigated'], 0.12,
         ['==', ['get', 'enforce'], 'narrow'], 0.14,
@@ -279,7 +279,7 @@ function addSourcesAndLayers() {
   });
   map.addLayer({
     id: 'exclusion-line', type: 'line', source: 'exclusion',
-    filter: ['all', ['!=', ['get', 'enforce'], 'narrow'], ['!=', ['get', 'enforce'], 'too_small'], ['!=', ['get', 'enforce'], 'irrigated']],
+    filter: ['all', ['!=', ['get', 'enforce'], 'narrow'], ['!=', ['get', 'enforce'], 'too_small'], ['!=', ['get', 'enforce'], 'irrigated'], ['!=', ['get', 'graze_on'], true]],
     paint: { 'line-color': '#4f9fd9', 'line-width': 2 }
   });
   map.addLayer({
@@ -289,7 +289,7 @@ function addSourcesAndLayers() {
   });
   map.addLayer({
     id: 'exclusion-line-established', type: 'line', source: 'exclusion',
-    filter: ['==', ['get', 'established'], '2026'],
+    filter: ['all', ['==', ['get', 'established'], '2026'], ['!=', ['get', 'graze_on'], true]],   // grazing reaches draw dashed instead
     paint: { 'line-color': '#d9a03a', 'line-width': 3 }
   });
   // Grazing allowed: hatched amber over the zone, dashed amber edge
@@ -1146,15 +1146,19 @@ function grazeLabelFC(region) {
   if (d) for (const f of d.exclusion.features) {
     const p = f.properties;
     if (!p.graze_on || !grazeActive(p)) continue;
+    // label goes on the biggest piece of the reach, so it sits on the zone
     let g = groups.get(p.graze_id);
-    if (!g) { g = { bb: [Infinity, Infinity, -Infinity, -Infinity], p }; groups.set(p.graze_id, g); }
-    try { const b = turf.bbox(f); g.bb = [Math.min(g.bb[0], b[0]), Math.min(g.bb[1], b[1]), Math.max(g.bb[2], b[2]), Math.max(g.bb[3], b[3])]; } catch (e) {}
+    if (!g || (p.acres || 0) > g.acres) groups.set(p.graze_id, { f, p, acres: p.acres || 0 });
   }
-  return { type: 'FeatureCollection', features: [...groups.values()].filter(g => isFinite(g.bb[0])).map(g => ({
-    type: 'Feature',
-    properties: { label: 'Grazing \u00b7 ' + grazeDaysLeft(g.p) + ' day' + (grazeDaysLeft(g.p) === 1 ? '' : 's') + ' left' },
-    geometry: { type: 'Point', coordinates: [(g.bb[0] + g.bb[2]) / 2, (g.bb[1] + g.bb[3]) / 2] }
-  })) };
+  return { type: 'FeatureCollection', features: [...groups.values()].map(g => {
+    let pt;
+    try { pt = turf.pointOnFeature(g.f).geometry.coordinates; } catch (e) { pt = turf.centroid(g.f).geometry.coordinates; }
+    return {
+      type: 'Feature',
+      properties: { label: 'Grazing \u00b7 ' + grazeDaysLeft(g.p) + ' day' + (grazeDaysLeft(g.p) === 1 ? '' : 's') + ' left' },
+      geometry: { type: 'Point', coordinates: pt }
+    };
+  }) };
 }
 function grazeActive(p) { return !!p.graze_until && new Date(p.graze_until).getTime() > Date.now(); }
 function grazeDaysLeft(p) { return Math.max(1, Math.ceil((new Date(p.graze_until).getTime() - Date.now()) / 86400000)); }
