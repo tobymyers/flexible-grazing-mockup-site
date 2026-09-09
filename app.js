@@ -1289,8 +1289,7 @@ function showGapCard(props) {
     `<button id="gap-close-btn" class="${open ? '' : 'sel-closed'}">Closed</button>` +
     '</div>' +
     (String(props.id).startsWith('user-')
-      ? '<div class="gap-toggle"><button id="gap-shape-btn" class="sel-open">Adjust shape</button></div>' +
-        '<div class="gap-toggle"><button id="gap-rename-btn">Rename</button></div>' +
+      ? '<div class="gap-toggle"><button id="gap-shape-btn">Adjust shape</button><button id="gap-rename-btn">Rename</button></div>' +
         '<button id="gap-del-btn" class="gap-remove">Remove this gap</button>'
       : '');
   $('.card-close').onclick = showHintCard;
