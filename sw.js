@@ -5,10 +5,10 @@
  */
 'use strict';
 
-const VERSION = 'rip-mockup-v54';
+const VERSION = 'rip-mockup-v55';
 // Bump ?v= in index.html together with VERSION: GitHub Pages caches every
 // file for 10 minutes, so a new page must ask for its own code by a new URL.
-const V = '54';
+const V = '55';
 const SHELL_CACHE = VERSION + '-shell';
 const TILE_CACHE = VERSION + '-tiles';
 

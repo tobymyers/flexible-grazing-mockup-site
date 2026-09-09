@@ -80,9 +80,10 @@ async function loadRegion(region) {
   // rancher's saved seasonal boundary edits if any exist on this device.
   out.exclusionPristine = JSON.parse(JSON.stringify(out.exclusion));
   try {
-    const edit = JSON.parse(localStorage.getItem('riparianEdit:' + region));
-    if (edit && Array.isArray(edit.features)) {
-      out.exclusion = { type: 'FeatureCollection', features: edit.features };
+    let edit = JSON.parse(localStorage.getItem('riparianEdit:' + region));
+    if (edit && Array.isArray(edit.features)) edit = migrateSnapshot(edit, out.exclusionPristine);
+    if (edit && edit.changed) {
+      out.exclusion = applyEditOverlay(out.exclusionPristine, edit);
       out.editSavedAt = edit.savedAt;
     }
   } catch (e) { /* no saved edits — use the suggested boundary */ }
@@ -666,14 +667,18 @@ function setEnforce(fid, val, msg, quiet) {
     // "Remove again" can put it back exactly
     f.properties._origGeom = f.geometry;
     snapFeatureToCollar(fid);
-  } else if (val === 'irrigated' && f.properties._origGeom) {
+  } else if (val === 'irrigated') {
     const d = regionData[currentRegion];
     d.exclusion.features = d.exclusion.features.filter(x => !x.properties.id.startsWith(fid + '-'));
-    f.geometry = f.properties._origGeom;
-    delete f.properties._origGeom;
-    delete f.properties.pts;
-    delete f.properties.established;
-    f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+    const orig = pristineFeature(currentRegion, fid);
+    if (orig) { f.geometry = orig.geometry; f.properties = orig.properties; }
+    else if (f.properties._origGeom) {
+      f.geometry = f.properties._origGeom;
+      delete f.properties._origGeom;
+      delete f.properties.pts;
+      delete f.properties.established;
+      f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+    }
   }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
@@ -1355,13 +1360,61 @@ function expireGrazing(region) {
   return msgs;
 }
 
+/* ---------------- Saved edits: an overlay on the shipped data ----------------
+   Only what the rancher changed is saved, keyed by feature id, on top of the
+   data the app ships. So a new data drop shows up everywhere they did not
+   touch, and "back to original" always means the current shipped shape.
+   (Before 9 Sep 2026 the whole layer was snapshotted, which froze every
+   device on the data it first saw.) */
+function editOverlay(region) {
+  const d = regionData[region];
+  const pristine = new Map(d.exclusionPristine.features.map(f => [f.properties.id, JSON.stringify(f)]));
+  const changed = {};
+  const seen = new Set();
+  for (const f of d.exclusion.features) {
+    const id = f.properties.id;
+    seen.add(id);
+    if (pristine.get(id) !== JSON.stringify(f)) changed[id] = f;
+  }
+  const removed = Array.from(pristine.keys()).filter(id => !seen.has(id));
+  return { season: '2026', savedAt: Date.now(), changed, removed };
+}
+function applyEditOverlay(pristineFC, edit) {
+  const removed = new Set(edit.removed || []);
+  const changed = edit.changed || {};
+  const used = new Set();
+  const out = [];
+  for (const f of pristineFC.features) {
+    const id = f.properties.id;
+    if (removed.has(id)) continue;
+    if (changed[id]) { out.push(changed[id]); used.add(id); } else out.push(f);
+  }
+  for (const id of Object.keys(changed)) if (!used.has(id)) out.push(changed[id]);   // pieces the rancher made
+  return { type: 'FeatureCollection', features: out };
+}
+// old whole-layer snapshots: keep only the features the rancher acted on
+function migrateSnapshot(snapshot, pristineFC) {
+  const ids = new Set(pristineFC.features.map(f => f.properties.id));
+  const acted = (f) => {
+    const p = f.properties || {};
+    return ['included', 'widened'].includes(p.enforce) || !!p.established || !!p.graze_on || !!p._edited || !ids.has(p.id);
+  };
+  const changed = {};
+  for (const f of snapshot.features) if (acted(f)) changed[f.properties.id] = f;
+  return { season: snapshot.season || '2026', savedAt: snapshot.savedAt || Date.now(), changed, removed: [] };
+}
+// the shipped shape of a feature in the current data drop (null for pieces the rancher made)
+function pristineFeature(region, fid) {
+  const p = regionData[region].exclusionPristine.features.find(x => x.properties.id === fid);
+  return p ? JSON.parse(JSON.stringify(p)) : null;
+}
 function persistSeasonEdit(region) {
+  const edit = editOverlay(region);
+  const any = Object.keys(edit.changed).length || edit.removed.length;
   try {
-    localStorage.setItem('riparianEdit:' + region, JSON.stringify({
-      season: '2026', savedAt: Date.now(),
-      features: regionData[region].exclusion.features
-    }));
-    regionData[region].editSavedAt = Date.now();
+    if (any) localStorage.setItem('riparianEdit:' + region, JSON.stringify(edit));
+    else localStorage.removeItem('riparianEdit:' + region);
+    regionData[region].editSavedAt = any ? edit.savedAt : null;
   } catch (e) { /* storage unavailable — change is session-only */ }
   updateSeasonChip();
 }
@@ -1403,11 +1456,15 @@ function widenFeature(fid, quiet) {
 function unwidenFeature(fid) {
   const f = regionData[currentRegion].exclusion.features.find(x => x.properties.id === fid);
   if (!f || !f.properties._origGeom) return;
-  f.geometry = f.properties._origGeom;
-  f.properties.enforce = f.properties._origEnforce || 'too_small';
-  delete f.properties._origGeom;
-  delete f.properties._origEnforce;
-  f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  const orig = pristineFeature(currentRegion, fid);
+  if (orig) { f.geometry = orig.geometry; f.properties = orig.properties; }
+  else {
+    f.geometry = f.properties._origGeom;
+    f.properties.enforce = f.properties._origEnforce || 'too_small';
+    delete f.properties._origGeom;
+    delete f.properties._origEnforce;
+    f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+  }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   showExclusionCard(f.properties);
@@ -2054,12 +2111,6 @@ function wireBoundaryEditing() {
       for (const p of res.pieces) editTouchedIds.add(p.properties.id);
       if (res.changed) adjusted += 1;
     }
-    try {
-      localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
-        season: '2026', savedAt: Date.now(), features: d.exclusion.features
-      }));
-      d.editSavedAt = Date.now();
-    } catch (e) {}
     // lifecycle: touched zones become "edited"; an established zone that
     // changed loses its established mark (approval must match the shape)
     let changedEstablished = false;
@@ -2073,13 +2124,8 @@ function wireBoundaryEditing() {
         changedEstablished = true;
       }
     }
-    try {
-      localStorage.setItem('riparianEdit:' + currentRegion, JSON.stringify({
-        season: '2026', savedAt: Date.now(), features: d.exclusion.features
-      }));
-    } catch (e) {}
+    persistSeasonEdit(currentRegion);
     refreshGapSources();
-    updateSeasonChip();
     exitBoundaryEdit();
     const zone = lastZoneId && d.exclusion.features.find(x => x.properties.id === lastZoneId);
     if (zone) showExclusionCard(zone.properties);
