@@ -35,7 +35,7 @@ const GAP_HALF_M = 15; // half of the 30 m gap width, for point→square seals
 /* ---------------- State ---------------- */
 
 let map;
-let currentRegion = 'red-canyon';
+let currentRegion = 'martinell';
 const regionData = {};      // region -> {layer: FeatureCollection}
 const gapOpenState = {};    // region -> {gapId: bool}
 let usedStubData = false;
@@ -1078,6 +1078,85 @@ function _reopenLanes(piece, before) {
   return out;
 }
 
+// A water gap is a hole in the fence. Two rules keep it real: it has to open
+// onto the pasture (at least 30 m of fence line inside it, one gap width), and the
+// fence that is left must still pass the corner rule, so a gap drawn at a
+// slant does not leave the collar a sharp corner. Returns null when the shape
+// touches no zone, else { geom, mouthM }.
+const GAP_MOUTH_M = 30;   // the standard gap width: a gap opens at least this much fence
+function shapeGapToFence(plugGeom) {
+  const d = regionData[currentRegion];
+  const plug = { type: 'Feature', properties: {}, geometry: plugGeom };
+  const zones = d.exclusion.features.filter(f => !['irrigated', 'too_small'].includes(f.properties.enforce));
+  const hits = zones.filter(f => { try { return turf.booleanIntersects(f, plug); } catch (e) { return false; } });
+  if (!hits.length) return null;
+  // the touching panels plus their neighbours, merged, so panel seams do not count as fence
+  const ids = new Set(hits.map(f => f.properties.id));
+  for (const f of zones) {
+    if (ids.has(f.properties.id)) continue;
+    if (hits.some(h => { try { return turf.booleanIntersects(f, h); } catch (e) { return false; } })) ids.add(f.properties.id);
+  }
+  let u = null;
+  for (const f of zones) {
+    if (!ids.has(f.properties.id)) continue;
+    try { u = u ? turf.union(turf.featureCollection([u, f])) : f; } catch (e) {}
+  }
+  if (!u) return null;
+  // mouth: fence line that falls inside the gap
+  let mouthM = 0;
+  try {
+    const lines = turf.flatten(turf.polygonToLine(u)).features;
+    for (const ln of lines) {
+      let parts;
+      try { parts = turf.lineSplit(ln, plug).features; } catch (e) { parts = []; }
+      if (!parts.length) parts = [ln];
+      for (const p of parts) {
+        const len = turf.length(p, { units: 'kilometers' }) * 1000;
+        if (len < 0.5) continue;
+        const mid = turf.along(p, len / 2000, { units: 'kilometers' });
+        if (turf.booleanPointInPolygon(mid, plug)) mouthM += len;
+      }
+    }
+  } catch (e) { mouthM = 0; }
+  if (mouthM < GAP_MOUTH_M) return { geom: plugGeom, mouthM };
+  // corner rule on what is left of the fence around the gap
+  let cut;
+  try { cut = turf.difference(turf.featureCollection([u, plug])); } catch (e) { cut = null; }
+  if (!cut) return { geom: plugGeom, mouthM };
+  const o = turf.centroid(plug).geometry.coordinates;
+  const fixedPolys = [];
+  for (const p of turf.flatten(cut).features) {
+    const ring = _fixCornersM(_toLocal(p.geometry.coordinates[0].slice(0, -1), o));
+    if (ring.length < 3) continue;
+    fixedPolys.push({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [_closeRing(_fromLocal(ring, o))] } });
+  }
+  let fixed = null;
+  for (const p of fixedPolys) { try { fixed = fixed ? turf.union(turf.featureCollection([fixed, p])) : p; } catch (e) {} }
+  if (!fixed) return { geom: plugGeom, mouthM };
+  let out = plug;
+  try {
+    const near = turf.buffer(plug, COLLAR.chamfer + 5, { units: 'meters', steps: 2 });
+    // corners the pass shaved off the fence join the gap; notch corners it filled leave the gap
+    const shaved = turf.difference(turf.featureCollection([cut, fixed]));
+    if (shaved) {
+      for (const p of turf.flatten(shaved).features) {
+        if (turf.area(p) < 150 || !turf.booleanIntersects(p, near)) continue;   // simplify drift, not a corner
+        try { out = turf.union(turf.featureCollection([out, p])); } catch (e) {}
+      }
+    }
+    const inside = turf.intersect(turf.featureCollection([out, u]));
+    const outsideZones = turf.difference(turf.featureCollection([out, u]));
+    let hole = inside ? turf.difference(turf.featureCollection([inside, fixed])) : null;
+    let merged = null;
+    for (const p of [outsideZones, hole]) { if (!p) continue; try { merged = merged ? turf.union(turf.featureCollection([merged, p])) : p; } catch (e) {} }
+    if (merged) out = merged;
+  } catch (e) { out = plug; }
+  const polys = turf.flatten(out).features.filter(p => p.geometry.type === 'Polygon').sort((x, y) => turf.area(y) - turf.area(x));
+  if (!polys.length) return { geom: plugGeom, mouthM };
+  return { geom: { type: 'Polygon', coordinates: [polys[0].geometry.coordinates[0]] }, mouthM };
+}
+const GAP_MOUTH_MSG = 'A water gap has to open onto the pasture. Draw it across the fence line, with at least 30 m of fence inside it.';
+
 // Replace one feature in the region's list with its collar-ready pieces.
 // Returns { pieces, changed } where changed = the drawing moved noticeably.
 function snapFeatureToCollar(fid, opts) {
@@ -1633,6 +1712,7 @@ function wireGapDragging() {
     if (placingGap && f.properties.id !== 'user-pending') return;
     e.preventDefault();
     draggingGapId = f.properties.id;
+    dragStartSnapshot = JSON.stringify(regionData[currentRegion].water_gaps.features);
     map.dragPan.disable();
     map.getCanvas().style.cursor = 'grabbing';
   };
@@ -1663,9 +1743,24 @@ function wireGapDragging() {
   };
   const end = () => {
     if (!draggingGapId) return;
+    const gid = draggingGapId;
     draggingGapId = null;
     map.dragPan.enable();
     map.getCanvas().style.cursor = '';
+    const d = regionData[currentRegion];
+    const feat = d.water_gaps.features.find(x => x.properties.id === gid);
+    const plug = d.water_gaps.features.find(x => x.properties.id === gid + '-plug');
+    if (feat && plug && feat.properties.shape === 'custom') {
+      const fence = shapeGapToFence(plug.geometry);
+      if (fence && fence.mouthM < GAP_MOUTH_M) {
+        // an island of access inside the zone is not a gap: put it back
+        if (dragStartSnapshot) d.water_gaps.features = JSON.parse(dragStartSnapshot);
+        refreshGapSources();
+        toast(GAP_MOUTH_MSG, 5000);
+        return;
+      }
+      if (fence) { plug.geometry = fence.geom; refreshGapSources(); }
+    }
     saveUserGaps(currentRegion);
     toast('Water gap moved.');
   };
@@ -1736,6 +1831,7 @@ let editUndoStack = [];
 let editEntrySnapshot = null;
 let editTouchedIds = new Set();
 let editGapId = null;        // set while the brush edits a water gap's shape
+let dragStartSnapshot = null; // water gaps as they were when a drag began
 
 function metersPerPixel() {
   const c = map.getCenter();
@@ -1928,7 +2024,9 @@ function wireBoundaryEditing() {
         const before = turf.area(plug);
         const pieces = collarizeFeature({ type: 'Feature', properties: { id: gid + '-plug' }, geometry: plug.geometry });
         const big = pieces.sort((x, y) => turf.area(y) - turf.area(x))[0];
-        if (big) plug.geometry = big.geometry;
+        const fence = big ? shapeGapToFence(big.geometry) : null;
+        if (fence && fence.mouthM < GAP_MOUTH_M) { toast(GAP_MOUTH_MSG, 5000); return; }   // keep editing
+        if (fence) plug.geometry = fence.geom; else if (big) plug.geometry = big.geometry;
         const ac = Math.round(turf.area(plug) / 4046.8564 * 10) / 10;
         if (pt) {
           pt.properties.shape = 'custom';
@@ -2437,7 +2535,7 @@ async function boot() {
 
   wireUI();
   showHintCard();
-  document.querySelector('#region-menu .menu-item[data-region="red-canyon"]').classList.add('current');
+  document.querySelector('#region-menu .menu-item[data-region="' + currentRegion + '"]').classList.add('current');
 
   if (!window.__BUNDLE && 'serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(err =>
