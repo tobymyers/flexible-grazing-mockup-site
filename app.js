@@ -90,6 +90,9 @@ async function loadRegion(region) {
       gapOpenState[region][id] = f.properties.open !== false;
     }
   }
+  // grazing windows whose days are over close themselves
+  const over = expireGrazing(region);
+  if (over.length) setTimeout(() => over.forEach((m, i) => setTimeout(() => toast(m, 4000), i * 4200)), 1500);
   return out;
 }
 
@@ -287,6 +290,29 @@ function addSourcesAndLayers() {
     id: 'exclusion-line-established', type: 'line', source: 'exclusion',
     filter: ['==', ['get', 'established'], '2026'],
     paint: { 'line-color': '#d9a03a', 'line-width': 3 }
+  });
+  // Grazing allowed: hatched amber over the zone, dashed amber edge
+  if (!map.hasImage('graze-hatch')) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 24;
+    const cx = cv.getContext('2d');
+    cx.clearRect(0, 0, 24, 24);
+    cx.strokeStyle = 'rgba(224, 168, 60, 0.9)';
+    cx.lineWidth = 3;
+    for (const o of [-24, -12, 0, 12, 24]) {
+      cx.beginPath(); cx.moveTo(o, 24); cx.lineTo(o + 24, 0); cx.stroke();
+    }
+    map.addImage('graze-hatch', cx.getImageData(0, 0, 24, 24));
+  }
+  map.addLayer({
+    id: 'exclusion-graze', type: 'fill', source: 'exclusion',
+    filter: ['==', ['get', 'graze_on'], true],
+    paint: { 'fill-pattern': 'graze-hatch', 'fill-opacity': 0.8 }
+  });
+  map.addLayer({
+    id: 'exclusion-graze-line', type: 'line', source: 'exclusion',
+    filter: ['==', ['get', 'graze_on'], true],
+    paint: { 'line-color': '#e0a83c', 'line-width': 3, 'line-dasharray': [1.5, 1] }
   });
   map.addSource('review-highlight', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
@@ -546,21 +572,38 @@ function showExclusionCard(props) {
   const est = props.established === '2026';
   const lifecycle = (['ok', 'included', 'widened'].includes(props.enforce || 'ok') && !isGuard);
   const edited = !!props._edited;
+  const grazing = lifecycle && est && grazeActive(props);
+  const plan = grazePlan();
   const badge = lifecycle
-    ? (est ? '<span class="zone-badge gold">Established 2026</span>'
+    ? (grazing ? `<span class="zone-badge graze">Grazing allowed &middot; ${grazeDaysLeft(props)} day${grazeDaysLeft(props) === 1 ? '' : 's'} left</span>`
+       : est ? '<span class="zone-badge gold">Established 2026</span>'
        : edited ? '<span class="zone-badge mid">Edited &middot; not yet established</span>'
        : '<span class="zone-badge prop">Proposed</span>')
     : '';
-  const estBtn = lifecycle
+  const estBtn = (lifecycle && !grazing)
     ? (est
       ? '<div class="gap-toggle"><button id="ex-unest-btn">Un-mark established</button></div>'
       : `<div class="gap-toggle"><button id="ex-est-btn" class="${edited ? 'sel-open' : ''}">Mark established for 2026</button></div>`)
     : '';
+  let grazeNote = '', grazeBtn = '';
+  if (lifecycle && est) {
+    if (grazing) {
+      const reach = reachOf(props.id);
+      const ac = Math.round(reach.reduce((s, f) => s + (f.properties.acres || 0), 0));
+      grazeNote = `<p class="card-sub">Whole reach: ${reach.length} piece${reach.length === 1 ? '' : 's'} &middot; ${ac.toLocaleString()} acres. ` +
+        `Collars treat it as pasture until ${fmtDay(props.graze_until)}.</p>`;
+      grazeBtn = '<div class="gap-toggle"><button id="ex-graze-off">Close grazing</button></div>';
+    } else if (plan !== 'rest') {
+      const nx = plan === '30' ? grazeNextYear(props) : null;
+      if (nx) grazeNote = `<p class="card-sub">Grazed ${nx.last} &middot; next ${nx.next}</p>`;
+      else grazeBtn = `<div class="gap-toggle"><button id="ex-graze-on" class="sel-open">Allow grazing &middot; ${GRAZE_DAYS[plan]} days</button></div>`;
+    }
+  }
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     `<p class="card-kicker">${isGuard ? 'Spring guard' : 'Exclusion zone'}</p>` +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${acres ? ' &middot; ' + acres + ' acres' : ''}</p>` +
-    badge +
+    badge + grazeNote +
     (isGuard
       ? '<p class="card-sub">A ready-made circle around a mapped spring, sized so collars can hold it. ' +
         'If this spring is not real any more, remove it.</p>' +
@@ -573,7 +616,7 @@ function showExclusionCard(props) {
     (props.source ? '<br>Source tag: ' + esc(props.source) : '') + '</p></details>' +
     narrowNote +
     '<div class="gap-toggle"><button id="ex-edit-btn" class="sel-open">Adjust boundary</button></div>' +
-    estBtn;
+    estBtn + grazeBtn;
   $('.card-close').onclick = showHintCard;
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
   const wbtn = $('#ex-widen-btn');
@@ -590,6 +633,10 @@ function showExclusionCard(props) {
   if (ebtn) ebtn.onclick = () => setEstablished(props.id, '2026', 'Established for the 2026 season.');
   const ubtn2 = $('#ex-unest-btn');
   if (ubtn2) ubtn2.onclick = () => setEstablished(props.id, null, 'Un-marked.');
+  const gon = $('#ex-graze-on');
+  if (gon) gon.onclick = () => allowGrazing(props.id);
+  const goff = $('#ex-graze-off');
+  if (goff) goff.onclick = () => closeGrazing(props.id);
 }
 
 function setEstablished(fid, val, msg) {
@@ -1060,6 +1107,109 @@ function snapFeatureToCollar(fid, opts) {
   const changed = Math.abs(areaAfter - areaBefore) > 0.08 * Math.max(areaBefore, 1) + 400;
   d.exclusion.features.splice(idx, 1, ...pieces);
   return { pieces, changed };
+}
+
+/* ---------------- Grazing days ----------------
+   A zone that is established can be opened for a set number of days
+   (the year's plan: rest / 5 days / 30 days once in 3 years). While open,
+   every panel of the reach carries graze_on and the collar would treat it
+   as pasture. Closes itself when the days are over. */
+const GRAZE_DAYS = { '5': 5, '30': 30 };
+function grazePlan() { try { return localStorage.getItem('grazePlan:' + currentRegion) || '5'; } catch (e) { return '5'; } }
+function setGrazePlan(v) { try { localStorage.setItem('grazePlan:' + currentRegion, v); } catch (e) {} }
+function grazeActive(p) { return !!p.graze_until && new Date(p.graze_until).getTime() > Date.now(); }
+function grazeDaysLeft(p) { return Math.max(1, Math.ceil((new Date(p.graze_until).getTime() - Date.now()) / 86400000)); }
+function fmtDay(iso) { return new Date(new Date(iso).getTime() - 60000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); }  // last day of the window
+function grazeNextYear(p) {
+  const log = p.graze_log || [];
+  if (!log.length) return null;
+  const last = Math.max(...log);
+  return last + 3 > new Date().getFullYear() ? { last, next: last + 3 } : null;
+}
+// every zone panel touching this one, and the ones touching those: the reach
+function reachOf(fid) {
+  const feats = regionData[currentRegion].exclusion.features.filter(f =>
+    !f.properties.spring_guard && !['too_small', 'irrigated'].includes(f.properties.enforce));
+  const start = feats.find(f => f.properties.id === fid);
+  if (!start) return [];
+  const bb = new Map(feats.map(f => { try { return [f.properties.id, turf.bbox(f)]; } catch (e) { return [f.properties.id, null]; } }));
+  const seen = new Set([fid]);
+  const queue = [start];
+  const out = [];
+  while (queue.length) {
+    const f = queue.shift();
+    out.push(f);
+    const b = bb.get(f.properties.id);
+    if (!b) continue;
+    for (const g of feats) {
+      if (seen.has(g.properties.id)) continue;
+      const c = bb.get(g.properties.id);
+      if (!c || c[0] > b[2] + 1e-5 || c[2] < b[0] - 1e-5 || c[1] > b[3] + 1e-5 || c[3] < b[1] - 1e-5) continue;
+      let touch = false;
+      try { touch = turf.booleanIntersects(f, g); } catch (e) {}
+      if (touch) { seen.add(g.properties.id); queue.push(g); }
+    }
+  }
+  return out;
+}
+function allowGrazing(fid) {
+  const days = GRAZE_DAYS[grazePlan()];
+  if (!days) return;
+  const reach = reachOf(fid);
+  if (!reach.length) return;
+  // N days counting today: window ends at midnight after day N
+  const until = new Date();
+  until.setHours(0, 0, 0, 0);
+  until.setDate(until.getDate() + days);
+  const gid = 'gz-' + Date.now();
+  const yr = new Date().getFullYear();
+  for (const f of reach) {
+    const p = f.properties;
+    p.graze_until = until.toISOString();
+    p.graze_days = days;
+    p.graze_id = gid;
+    p.graze_on = true;
+    if (days === 30) p.graze_log = Array.from(new Set([...(p.graze_log || []), yr]));
+  }
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  showExclusionCard(reach.find(x => x.properties.id === fid).properties);
+  toast('Grazing allowed until ' + fmtDay(until.toISOString()) + '.');
+}
+function closeGrazing(fid, quiet) {
+  const feats = regionData[currentRegion].exclusion.features;
+  const f = feats.find(x => x.properties.id === fid);
+  if (!f) return;
+  const gid = f.properties.graze_id;
+  for (const g of feats) {
+    const p = g.properties;
+    if (g === f || (gid && p.graze_id === gid)) { delete p.graze_until; delete p.graze_days; delete p.graze_id; delete p.graze_on; }
+  }
+  persistSeasonEdit(currentRegion);
+  refreshGapSources();
+  if (quiet) return;
+  showExclusionCard(f.properties);
+  toast('Grazing closed.');
+}
+// on load: windows whose days are over close themselves
+function expireGrazing(region) {
+  const d = regionData[region];
+  if (!d) return [];
+  const msgs = [];
+  const seen = new Set();
+  let changed = false;
+  for (const f of d.exclusion.features) {
+    const p = f.properties;
+    if (!p.graze_until || new Date(p.graze_until).getTime() > Date.now()) continue;
+    if (!seen.has(p.graze_id)) {
+      seen.add(p.graze_id);
+      msgs.push('Grazing closed at ' + (p.name || 'this zone') + '. The ' + p.graze_days + ' days are over.');
+    }
+    delete p.graze_until; delete p.graze_days; delete p.graze_id; delete p.graze_on;
+    changed = true;
+  }
+  if (changed) persistSeasonEdit(region);
+  return msgs;
 }
 
 function persistSeasonEdit(region) {
@@ -1668,8 +1818,10 @@ function wireBoundaryEditing() {
     // lifecycle: touched zones become "edited"; an established zone that
     // changed loses its established mark (approval must match the shape)
     let changedEstablished = false;
+    let closedGrazing = false;
     for (const f of d.exclusion.features) {
       if (!editTouchedIds.has(f.properties.id)) continue;
+      if (f.properties.graze_on) { closeGrazing(f.properties.id, true); closedGrazing = true; }
       f.properties._edited = true;
       if (f.properties.established === '2026') {
         delete f.properties.established;
@@ -1687,7 +1839,8 @@ function wireBoundaryEditing() {
     const zone = lastZoneId && d.exclusion.features.find(x => x.properties.id === lastZoneId);
     if (zone) showExclusionCard(zone.properties);
     toast(changedEstablished
-      ? 'This zone changed. Mark it established again when it looks right.'
+      ? (closedGrazing ? 'This zone changed. Grazing closed. Mark it established again when it looks right.'
+                       : 'This zone changed. Mark it established again when it looks right.')
       : (adjusted ? 'Saved. Your shape was adjusted to collar rules.' : 'Changes saved.'));
   };
 
@@ -1775,7 +1928,7 @@ function openSheet(el) {
 }
 
 const LAYER_GROUPS = {
-  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established'],
+  exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established', 'exclusion-graze', 'exclusion-graze-line'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons', 'gap-name-label'],
   allotments: ['allotments-line', 'allotments-label'],
   ownership: ['ownership-fill', 'ownership-source-label'],
@@ -1871,14 +2024,40 @@ function openAreasSheet(section) {
   const myGaps = (d ? d.water_gaps.features : []).filter(f =>
     String(f.properties.id).startsWith('user-') && f.properties.id !== 'user-pending');
 
+  const plan = grazePlan();
+  const planNote = plan === 'rest' ? 'Cows stay out of every blue area this year.'
+    : plan === '30' ? 'Cows can graze a blue area for 30 days, one year in three.'
+    : 'Cows can graze a blue area for up to 5 days this year.';
+  const planRow =
+    '<div class="plan-row"><span class="plan-label">This year</span>' +
+    `<button class="chip ${plan === 'rest' ? 'sel' : ''}" data-plan="rest">Rest this year</button>` +
+    `<button class="chip ${plan === '5' ? 'sel' : ''}" data-plan="5">Graze 5 days</button>` +
+    `<button class="chip ${plan === '30' ? 'sel' : ''}" data-plan="30">Graze 30 days</button></div>` +
+    `<p class="areas-empty" style="padding-top:4px">${planNote}</p>`;
+
+  // grazing allowed: one row per reach
+  const grazingNow = feats.filter(f => f.properties.graze_on && grazeActive(f.properties));
+  const reaches = new Map();
+  for (const f of grazingNow) {
+    const p = f.properties;
+    const r = reaches.get(p.graze_id) || { id: p.id, name: p.name, acres: 0, until: p.graze_until, p };
+    r.acres += p.acres || 0;
+    reaches.set(p.graze_id, r);
+  }
+  const grazeRows = [...reaches.values()].map(r => {
+    const left = grazeDaysLeft(r.p);
+    return `<button class="area-row" data-fid="${esc(r.id)}">` +
+      `<span>${esc(r.name || 'Area')}<small>${left} day${left === 1 ? '' : 's'} left &middot; ${Math.round(r.acres).toLocaleString()} acres</small></span></button>`;
+  }).join('');
+
   const zoneRows = mine.length ? mine.map(f => {
     const p = f.properties;
-    const what = p.established === '2026' ? 'Established 2026'
-      : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
+    if (p.graze_on && grazeActive(p)) return '';
+    const what = p.established === '2026' ? '' : p.enforce === 'widened' ? 'Widened spot' : 'Added by you';
     const ac = p.acres != null ? Math.round(p.acres).toLocaleString() + (Math.round(p.acres) === 1 ? ' acre' : ' acres') : '';
     return `<button class="area-row" data-fid="${esc(p.id)}">` +
       `<span>${esc(p.name || 'Area')}<small>${ac}</small></span>` +
-      `<span class="area-badge">${what}</span></button>`;
+      (what ? `<span class="area-badge">${what}</span>` : '') + `</button>`;
   }).join('')
     : '<p class="areas-empty">None yet. Tap a blue area, then "Mark established for 2026."</p>';
 
@@ -1892,17 +2071,19 @@ function openAreasSheet(section) {
   }).join('')
     : '<p class="areas-empty">None yet. Tap the Water gap button, then tap the fence line.</p>';
 
-  const savedNote = d && d.editSavedAt
-    ? `<p class="areas-empty" style="margin:0 0 4px">Your edits are saved on this phone (last save ${new Date(d.editSavedAt).toLocaleDateString()}).</p>`
-    : '';
   let toCheck = 0;
   try { toCheck = buildReviewList(currentRegion).length; } catch (e) {}
   const checkRow = toCheck
     ? `<button class="area-row" id="areas-check-row"><span>&#9888; Check suggested spots<small>Places the data is not sure about</small></span><span class="area-badge">${toCheck}</span></button>`
     : '';
-  list.innerHTML = savedNote + checkRow +
-    `<h3 class="area-section-h" id="sec-approved">Approved for 2026 (${mine.length})</h3>` + zoneRows +
+  list.innerHTML = planRow + checkRow +
+    (reaches.size ? `<h3 class="area-section-h">Grazing allowed (${reaches.size})</h3>` + grazeRows : '') +
+    `<h3 class="area-section-h" id="sec-approved">Established 2026 (${mine.length})</h3>` + zoneRows +
     `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows;
+
+  list.querySelectorAll('.chip[data-plan]').forEach(btn => {
+    btn.onclick = () => { setGrazePlan(btn.dataset.plan); openAreasSheet(section); };
+  });
 
   list.querySelectorAll('.area-row[data-fid]').forEach(btn => {
     btn.onclick = () => {
