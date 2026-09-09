@@ -314,7 +314,7 @@ body {
 
 /* Grazing days */
 .zone-badge.graze { background: rgba(224, 168, 60, 0.22); color: #f0c060; }
-.plan-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 2px; }
+.plan-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
 .plan-label { font-size: 13px; font-weight: 700; color: var(--mint); text-transform: uppercase; letter-spacing: .4px; margin-right: 4px; }
 .chip {
   border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(255, 255, 255, 0.06); color: var(--ink);
@@ -323,5 +323,5 @@ body {
 .chip.sel { background: var(--mint); border-color: var(--mint); color: #1b1a14; }
 .legend-hatch {
   display: inline-block; width: 26px; height: 14px; vertical-align: -2px; border: 1px dashed #e0a83c; border-radius: 3px;
-  background: repeating-linear-gradient(135deg, rgba(224,168,60,.9) 0 2px, transparent 2px 6px);
+  background: repeating-linear-gradient(135deg, rgba(224,168,60,.9) 0 2px, transparent 2px 6px); border-style: solid;
 }
