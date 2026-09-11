@@ -1,0 +1,26 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "id": "pay-rc-2026",
+    "kind": "funding",
+    "funder": "Foundation for America's Public Lands",
+    "amount": 5000,
+    "season": 2026,
+    "status": "offered",
+    "editable": false,
+    "source": "Demo offer, not a real contract",
+    "season_end": "2026-10-15"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -108.63002,
+     42.67031
+    ]
+   }
+  }
+ ]
+}

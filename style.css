@@ -360,3 +360,11 @@ body {
 .nrcs-row small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .nrcs-row b { white-space: nowrap; }
 .nrcs-note { margin-top: 12px; }
+
+/* Deferred grazing payment */
+.zone-badge.pay { background: rgba(120, 200, 140, 0.18); color: #9fe3b9; margin-left: 6px; }
+.area-act.pay { background: rgba(120, 200, 140, 0.18); color: #9fe3b9; }
+.area-row .area-badge.paid { background: rgba(120, 200, 140, 0.18); color: #9fe3b9; }
+#defer-sheet .menu-item.accept { background: #2979ff; color: #fff; text-align: center; margin-top: 8px; }
+#defer-sheet .menu-item.accept:disabled { opacity: .45; cursor: default; }
+#defer-sheet .nrcs-row { align-items: flex-start; }

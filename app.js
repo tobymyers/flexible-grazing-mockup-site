@@ -16,7 +16,7 @@ const BASEMAP_STYLE = 'https://basemapstyles-api.arcgis.com/arcgis/rest/services
 const DATA_ROOT = 'data';
 const STUB_ROOT = 'stub-data';
 
-const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water'];
+const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water', 'funding'];
 
 const REGIONS = {
   'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
@@ -594,11 +594,18 @@ function showExclusionCard(props) {
   const nrcsLine = (lifecycle && reach.length && onPrivateLand(reach[0]))
     ? `<button id="ex-nrcs" class="nrcs-line"><span>Potential NRCS funding: ${nrcsLineText(reach)}<small>Codes 528 + 472</small></span><i class="chev">&#8250;</i></button>`
     : '';
+  const payOffer = lifecycle && reach.length ? (currentOffer(props.id) || offersForReach(props.id)[0] || null) : null;
+  let payLine = '', payBadge = '';
+  if (payOffer) {
+    const t = payLineText(payOffer);
+    payLine = `<button id="ex-pay" class="nrcs-line"><span>${esc(t.main)}<small>${esc(t.sub)}</small></span><i class="chev">&#8250;</i></button>`;
+    if (paymentStatus(payOffer) === 'accepted') payBadge = `<span class="zone-badge pay">Payment accepted &middot; ${fmtAmount(payOffer.properties.amount)}</span>`;
+  }
   $('#card-body').innerHTML =
     '<button class="card-close" aria-label="Close">&times;</button>' +
     `<p class="card-kicker">${isGuard ? 'Spring guard' : 'Exclusion zone'}</p>` +
     `<p class="card-main">${esc(props.name || 'Creek bottom')}${lifecycle ? reachLine : (acres ? ' &middot; ' + acres + ' acres' : '')}</p>` +
-    badge +
+    badge + payBadge +
     (isGuard
       ? '<p class="card-sub">A ready-made circle around a mapped spring, sized so collars can hold it. ' +
         'If this spring is not real any more, remove it.</p>' +
@@ -610,10 +617,12 @@ function showExclusionCard(props) {
     (attrs.length ? '<br>This piece: ' + attrs.join('; ') + '.' : '') +
     (props.source ? '<br>Source tag: ' + esc(props.source) : '') + '</p></details>' +
     narrowNote +
-    primary + secondary + nrcsLine + links;
+    primary + secondary + nrcsLine + payLine + links;
   $('.card-close').onclick = showHintCard;
   const nbtn = $('#ex-nrcs');
   if (nbtn) nbtn.onclick = () => openNrcsSheet(props.id);
+  const pbtn2 = $('#ex-pay');
+  if (pbtn2) pbtn2.onclick = () => openDeferSheet(props.id, 'view');
   $('#ex-edit-btn').onclick = enterBoundaryEdit;
   const wbtn = $('#ex-widen-btn');
   if (wbtn) wbtn.onclick = () => widenFeature(props.id);
@@ -638,7 +647,7 @@ function setEstablished(fid, val, msg) {
   const reach = reachOf(fid);
   if (!reach.length) return;
   for (const f of reach) { if (val) f.properties.established = val; else delete f.properties.established; }
-  if (!val) closeGrazing(fid, true);
+  if (!val) { closeGrazing(fid, true); const ep = endDeferredPayment(fid, 'Un-marked'); if (ep && msg) msg += ' The ' + fmtAmount(ep.properties.amount) + ' payment ended.'; }
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   showExclusionCard(reach.find(x => x.properties.id === fid).properties);
@@ -1244,6 +1253,117 @@ function openNrcsSheet(fid) {
   $('#nrcs-close').onclick = closeSheets;
 }
 
+/* ---------------- Deferred grazing payment ----------------
+   A funder (TNC, Foundation for America's Public Lands) pays a fixed amount
+   for keeping a reach established for the whole season. Offers ship in
+   data/<region>/funding.geojson as points; each resolves to the zone under
+   it, and applies to that zone's reach. Accepting happens in My areas. The
+   payment ends the moment the reach stops being established: grazing days
+   opened, un-marked, or the boundary changed. Money never changes the map. */
+const PAY_KEY = (r) => 'deferPay:' + r;
+let payState = {};
+function loadPayState(region) {
+  if (payState[region]) return payState[region];
+  let st = {};
+  try { st = JSON.parse(localStorage.getItem(PAY_KEY(region))) || {}; } catch (e) { st = {}; }
+  payState[region] = st;
+  return st;
+}
+function savePayState(region) {
+  try { localStorage.setItem(PAY_KEY(region), JSON.stringify(payState[region] || {})); } catch (e) {}
+}
+function fmtDate(iso, year) {
+  const d = new Date(iso + (iso.length === 10 ? 'T12:00:00' : ''));
+  return d.toLocaleDateString(undefined, year ? { month: 'short', day: 'numeric', year: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+function fmtAmount(n) { return '$' + Math.round(n).toLocaleString(); }
+// the zone under an offer's point (lifecycle zones only)
+function offerZone(offer) {
+  if (offer._zone !== undefined) return offer._zone;
+  const zones = regionData[currentRegion].exclusion.features.filter(f =>
+    ['ok', 'included', 'widened'].includes(f.properties.enforce || 'ok') && !f.properties.spring_guard);
+  let hit = null;
+  try { hit = zones.find(z => turf.booleanPointInPolygon(offer, z)) || null; } catch (e) { hit = null; }
+  offer._zone = hit ? hit.properties.id : null;
+  return offer._zone;
+}
+// every offer that applies to this zone's reach, newest season first
+function offersForReach(fid) {
+  const d = regionData[currentRegion];
+  if (!d || !d.funding) return [];
+  const ids = new Set(reachOf(fid).map(f => f.properties.id));
+  return d.funding.features.filter(o => ids.has(offerZone(o)))
+    .sort((x, y) => (y.properties.season || 0) - (x.properties.season || 0));
+}
+function paymentStatus(offer) {
+  const p = offer.properties;
+  if (p.status === 'paid') return 'paid';
+  const st = loadPayState(currentRegion)[p.id];
+  if (st && st.ended) return 'ended';
+  if (st && st.accepted) return 'accepted';
+  return 'offered';
+}
+// the one offer that can still be acted on this season
+function currentOffer(fid) {
+  return offersForReach(fid).find(o => ['offered', 'accepted'].includes(paymentStatus(o))) || null;
+}
+function acceptDeferredPayment(fid) {
+  const offer = currentOffer(fid);
+  if (!offer || paymentStatus(offer) !== 'offered') return;
+  const st = loadPayState(currentRegion);
+  st[offer.properties.id] = { accepted: new Date().toISOString() };
+  savePayState(currentRegion);
+  closeSheets();
+  openAreasSheet();
+  toast('Payment accepted. ' + fmtAmount(offer.properties.amount) + ' pays ' + fmtDate(offer.properties.season_end) + ' if the reach stays closed.');
+}
+// called wherever a reach stops being established; returns the ended offer or null
+function endDeferredPayment(fid, reason) {
+  const offer = currentOffer(fid);
+  if (!offer || paymentStatus(offer) !== 'accepted') return null;
+  const st = loadPayState(currentRegion);
+  st[offer.properties.id] = Object.assign(st[offer.properties.id] || {}, { ended: new Date().toISOString(), reason });
+  savePayState(currentRegion);
+  return offer;
+}
+function payLineText(offer) {
+  const p = offer.properties, amt = fmtAmount(p.amount);
+  switch (paymentStatus(offer)) {
+    case 'paid': return { main: `Deferred grazing payment: ${amt} paid ${fmtDate(p.paid_on, true)}`, sub: `From ${p.funder}, ${p.season} season` };
+    case 'accepted': return { main: `Deferred grazing payment accepted: ${amt}`, sub: `From ${p.funder}. Pays ${fmtDate(p.season_end)} by direct deposit.` };
+    case 'ended': { const st = loadPayState(currentRegion)[p.id]; return { main: 'Deferred grazing payment ended', sub: `${st.reason} ${fmtDate(st.ended)}. The ${amt} from ${p.funder} will not be paid.` }; }
+    default: return { main: `Deferred grazing payment: ${amt} from ${p.funder}`, sub: `Keep cows out through ${fmtDate(p.season_end)}. Accept from My areas.` };
+  }
+}
+function openDeferSheet(fid, mode) {
+  const offers = offersForReach(fid);
+  const offer = currentOffer(fid) || offers[0];
+  if (!offer) return;
+  const p = offer.properties, status = paymentStatus(offer);
+  const reach = reachOf(fid);
+  const zone = reach.find(x => x.properties.id === fid) || reach[0];
+  const est = zone && zone.properties.established === '2026';
+  const back = !$('#areas-sheet').hidden;
+  const line = payLineText(offer);
+  $('#defer-body').innerHTML =
+    `<p class="nrcs-lead">${fmtAmount(p.amount)} from ${esc(p.funder)}</p>` +
+    `<div class="nrcs-row"><span>Reach</span><b>${esc(zone ? zone.properties.name : 'Reach')} &middot; ${reachAcres(reach).toLocaleString()} acres</b></div>` +
+    `<div class="nrcs-row"><span>Season</span><b>through ${fmtDate(p.season_end, true)}</b></div>` +
+    `<div class="nrcs-row"><span>What counts<small>The reach stays marked established all season. No grazing days opened. The boundary is not shrunk.</small></span></div>` +
+    `<div class="nrcs-row"><span>How it is checked<small>The collar records show the reach stayed closed.</small></span></div>` +
+    `<div class="nrcs-row"><span>How it pays<small>Direct deposit within 30 days after the season ends.</small></span></div>` +
+    (mode === 'accept' && status === 'offered'
+      ? `<div class="nrcs-row"><span>Pays to</span><b>ranch checking &middot;&middot;&middot;4821</b></div>` +
+        (est ? '' : '<p class="sheet-sub nrcs-note">Mark the reach established first.</p>')
+      : `<p class="sheet-sub nrcs-note">${esc(line.main)}. ${esc(line.sub)}</p>`);
+  const acc = $('#defer-accept');
+  acc.hidden = !(mode === 'accept' && status === 'offered');
+  acc.disabled = !est;
+  acc.onclick = () => acceptDeferredPayment(fid);
+  $('#defer-close').onclick = () => { closeSheets(); if (back) openSheet($('#areas-sheet')); };
+  openSheet($('#defer-sheet'));
+}
+
 /* ---------------- Grazing days ----------------
    A zone that is established can be opened for a set number of days
    (the year's plan: rest / 5 days / 30 days once in 3 years). While open,
@@ -1296,6 +1416,7 @@ function allowGrazing(fid, days) {
   until.setDate(until.getDate() + days);
   const gid = 'gz-' + Date.now();
   const yr = new Date().getFullYear();
+  const endedPay = endDeferredPayment(fid, 'Grazing opened');
   for (const f of reach) {
     const p = f.properties;
     p.graze_until = until.toISOString();
@@ -1307,7 +1428,7 @@ function allowGrazing(fid, days) {
   persistSeasonEdit(currentRegion);
   refreshGapSources();
   if (!$('#areas-sheet').hidden) openAreasSheet(); else showExclusionCard(reach.find(x => x.properties.id === fid).properties);
-  toast('Grazing allowed \u00b7 ' + days + ' days.');
+  toast('Grazing allowed \u00b7 ' + days + ' days.' + (endedPay ? ' The ' + fmtAmount(endedPay.properties.amount) + ' payment ended.' : ''));
 }
 // small chooser: 5 days this year, or 30 days one year in three
 function openGrazeSheet(fid) {
@@ -1318,6 +1439,13 @@ function openGrazeSheet(fid) {
   b30.disabled = !!nx;
   b30.querySelector('small').textContent = nx ? `Grazed ${nx.last} \u00b7 next ${nx.next}` : 'Rest the other two years';
   const back = !$('#areas-sheet').hidden;
+  const live = currentOffer(fid);
+  const note = $('#graze-note');
+  if (note) {
+    const on = live && paymentStatus(live) === 'accepted';
+    note.hidden = !on;
+    if (on) note.textContent = 'Opening grazing ends the ' + fmtAmount(live.properties.amount) + ' deferred grazing payment from ' + live.properties.funder + '.';
+  }
   const done = (days) => { closeSheets(); if (back) openSheet($('#areas-sheet')); allowGrazing(fid, days); };
   $('#graze-5').onclick = () => done(5);
   b30.onclick = () => { if (!nx) done(30); };
@@ -2120,6 +2248,7 @@ function wireBoundaryEditing() {
       if (f.properties.graze_on) { closeGrazing(f.properties.id, true); closedGrazing = true; }
       f.properties._edited = true;
       if (f.properties.established === '2026') {
+        endDeferredPayment(f.properties.id, 'Boundary changed');
         for (const r of reachOf(f.properties.id)) delete r.properties.established;   // approval is per reach
         changedEstablished = true;
       }
@@ -2209,6 +2338,7 @@ function closeSheets() {
   $('#info-sheet').hidden = true;
   const gs = $('#graze-sheet'); if (gs) gs.hidden = true;
   const ns = $('#nrcs-sheet'); if (ns) ns.hidden = true;
+  const ds = $('#defer-sheet'); if (ds) ds.hidden = true;
   if (scrimEl) { scrimEl.remove(); scrimEl = null; }
   if (!editMode) $('#bottom-row').style.display = '';
 }
@@ -2332,11 +2462,16 @@ function openAreasSheet(section) {
     const on = p.graze_on && grazeActive(p);
     const status = on ? ` &middot; Grazing allowed &middot; ${grazeDaysLeft(p)} day${grazeDaysLeft(p) === 1 ? '' : 's'} left` : '';
     const nrcs = onPrivateLand(f) ? ` &middot; NRCS ${nrcsLineText(reach)}` : '';
-    const action = on
+    const offer = currentOffer(p.id);
+    const pst = offer ? paymentStatus(offer) : null;
+    const pay = pst === 'accepted' ? ` &middot; Payment accepted &middot; ${fmtAmount(offer.properties.amount)} pays ${fmtDate(offer.properties.season_end)}`
+      : pst === 'offered' ? ` &middot; ${fmtAmount(offer.properties.amount)} offered by ${esc(offer.properties.funder)}` : '';
+    const action = (on
       ? `<button class="area-act" data-close="${esc(p.id)}">Close grazing</button>`
-      : `<button class="area-act" data-graze="${esc(p.id)}">Graze</button>`;
+      : `<button class="area-act" data-graze="${esc(p.id)}">Graze</button>`) +
+      (pst === 'offered' ? `<button class="area-act pay" data-pay="${esc(p.id)}">Payment</button>` : '');
     reachRows.push(`<div class="area-row-wrap"><button class="area-row" data-fid="${esc(p.id)}">` +
-      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}${nrcs}</small></span></button>${action}</div>`);
+      `<span>${esc(p.name || 'Area')}<small>${reachAcres(reach).toLocaleString()} acres${status}${nrcs}${pay}</small></span></button>${action}</div>`);
   }
   const extraRows = mine.filter(f => f.properties.established !== '2026').map(f => {
     const p = f.properties;
@@ -2363,9 +2498,23 @@ function openAreasSheet(section) {
   const checkRow = toCheck
     ? `<button class="area-row" id="areas-check-row"><span>&#9888; Check suggested spots<small>Places the data is not sure about</small></span><span class="area-badge">${toCheck}</span></button>`
     : '';
+  // payments: every accepted, ended, or paid offer in this region
+  const payRows = [];
+  for (const o of (d && d.funding ? d.funding.features : [])) {
+    const zid = offerZone(o);
+    if (!zid) continue;
+    const st = paymentStatus(o), p = o.properties;
+    if (st === 'offered') continue;
+    const line = st === 'paid' ? `Paid ${fmtDate(p.paid_on, true)} &middot; direct deposit &middot;&middot;&middot;4821`
+      : st === 'accepted' ? `Pending &middot; pays ${fmtDate(p.season_end, true)} if the reach stays closed`
+      : `Ended ${fmtDate(loadPayState(currentRegion)[p.id].ended)} &middot; ${esc(loadPayState(currentRegion)[p.id].reason.toLowerCase())}`;
+    payRows.push(`<button class="area-row" data-fid="${esc(zid)}"><span>${esc(p.funder)} &middot; ${fmtAmount(p.amount)}<small>${line}</small></span>` +
+      `<span class="area-badge${st === 'paid' ? ' paid' : ''}">${st === 'paid' ? 'Paid' : st === 'accepted' ? 'Pending' : 'Ended'}</span></button>`);
+  }
   list.innerHTML = checkRow +
     `<h3 class="area-section-h" id="sec-approved">Established 2026 (${reachRows.length + extraRows.length})</h3>` + zoneRows +
-    `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows;
+    `<h3 class="area-section-h" id="sec-gaps">Water gaps (${myGaps.length})</h3>` + gapRows +
+    (payRows.length ? `<h3 class="area-section-h" id="sec-pay">Payments (${payRows.length})</h3>` + payRows.join('') : '');
 
   list.querySelectorAll('.area-row[data-fid]').forEach(btn => {
     btn.onclick = () => {
@@ -2382,6 +2531,7 @@ function openAreasSheet(section) {
   });
   list.querySelectorAll('.area-act[data-graze]').forEach(btn => { btn.onclick = () => openGrazeSheet(btn.dataset.graze); });
   list.querySelectorAll('.area-act[data-close]').forEach(btn => { btn.onclick = () => closeGrazing(btn.dataset.close); });
+  list.querySelectorAll('.area-act[data-pay]').forEach(btn => { btn.onclick = () => openDeferSheet(btn.dataset.pay, 'accept'); });
   list.querySelectorAll('.area-row[data-gid]').forEach(btn => {
     btn.onclick = () => {
       const f = myGaps.find(x => x.properties.id === btn.dataset.gid);

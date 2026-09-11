@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314150f'/%3E%3Cpath d='M32 12c8 10 14 17 14 25a14 14 0 1 1-28 0c0-8 6-15 14-25z' fill='%234da3ff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.css">
-<link rel="stylesheet" href="style.css?v=55">
+<link rel="stylesheet" href="style.css?v=56">
 </head>
 <body>
 
@@ -134,6 +134,19 @@
     30 days one year in three. For those days the collar treats it as pasture. The
     days come from the rancher's grazing plan.</li>
   </ol>
+  <h2>Deferred grazing payments</h2>
+  <p class="sheet-sub">A funder such as The Nature Conservancy or the Foundation for
+  America's Public Lands can offer a fixed payment for keeping a reach closed all
+  season. It works on public land, where NRCS cannot pay.</p>
+  <ol class="info-list">
+    <li><b>The offer</b> shows on the reach's card. Accept it from My areas once the
+    reach is marked established.</li>
+    <li><b>What counts.</b> The reach stays established all season, no grazing days
+    are opened, and the boundary is not shrunk. Any of those ends the payment.</li>
+    <li><b>How it is checked.</b> The collar records show the reach stayed closed.</li>
+    <li><b>How it pays.</b> Direct deposit within 30 days after the season ends.
+    Payments show under My areas.</li>
+  </ol>
   <h2>Where the NRCS numbers come from</h2>
   <p class="sheet-sub">A card shows "Potential NRCS funding" when the exclusion is not
   on BLM, State, Forest Service, or Fish and Wildlife ground. In Montana this likely
@@ -165,10 +178,20 @@
   <button class="menu-item" id="nrcs-close">Close</button>
 </div>
 
+<!-- Deferred grazing payment -->
+<div id="defer-sheet" class="sheet mini" hidden>
+  <div class="sheet-grab"></div>
+  <h2>Deferred grazing payment</h2>
+  <div id="defer-body"></div>
+  <button class="menu-item accept" id="defer-accept" hidden>Accept</button>
+  <button class="menu-item" id="defer-close">Close</button>
+</div>
+
 <!-- Grazing chooser -->
 <div id="graze-sheet" class="sheet mini" hidden>
   <div class="sheet-grab"></div>
   <h2>Allow grazing on this reach</h2>
+  <p id="graze-note" class="sheet-sub" hidden></p>
   <button class="menu-item" id="graze-5">5 days this year</button>
   <button class="menu-item" id="graze-30">30 days, one year in three <small>Rest the other two years</small></button>
   <button class="menu-item" id="graze-cancel">Cancel</button>
@@ -211,6 +234,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/7.2.0/turf.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=55"></script>
+<script src="app.js?v=56"></script>
 </body>
 </html>

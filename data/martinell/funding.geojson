@@ -1,0 +1,48 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "properties": {
+    "id": "pay-m-2026",
+    "kind": "funding",
+    "funder": "The Nature Conservancy",
+    "amount": 5000,
+    "season": 2026,
+    "status": "offered",
+    "editable": false,
+    "source": "Demo offer, not a real contract",
+    "season_end": "2026-10-15"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -111.79315,
+     44.71479
+    ]
+   }
+  },
+  {
+   "type": "Feature",
+   "properties": {
+    "id": "pay-m-2025",
+    "kind": "funding",
+    "funder": "The Nature Conservancy",
+    "amount": 5000,
+    "season": 2025,
+    "status": "paid",
+    "editable": false,
+    "source": "Demo offer, not a real contract",
+    "season_end": "2025-10-15",
+    "paid_on": "2025-11-03"
+   },
+   "geometry": {
+    "type": "Point",
+    "coordinates": [
+     -111.81396,
+     44.73191
+    ]
+   }
+  }
+ ]
+}
