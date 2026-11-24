@@ -29,13 +29,13 @@ const REGIONS = {
   // covers only the ground-truth box, so Red Canyon's zones stop at the edge of the pastures.
   'red-canyon': { label: 'Red Canyon', center: [-108.724, 42.621], zoom: 11.6,
                   detail: { center: [-108.628, 42.667], zoom: 15.4 },
-                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
+                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1', maxCorners: 100 },
   'zumwalt':    { label: 'Zumwalt Prairie', center: [-116.949, 45.581], zoom: 11.8,
                   detail: { center: [-116.949, 45.581], zoom: 11.8 },
-                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
+                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1', maxCorners: 100 },
   'las-piletas': { label: 'Las Piletas', center: [-120.097, 35.286], zoom: 12.2,
                    detail: { center: [-120.097, 35.286], zoom: 12.2 },
-                   files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
+                   files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1', maxCorners: 100 },
   'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
                   detail: { center: [-111.392, 42.124], zoom: 15.1 } },
   'holland':    { label: 'Big Hole (Holland)', center: [-113.03, 45.29], zoom: 11.6,
@@ -2188,6 +2188,27 @@ function applyStroke() {
   refreshGapSources();
 }
 
+// Count every corner of a feature, every ring, closing corner included (as the
+// recipe export counts them).
+function cornerCount(f) {
+  const g = f.geometry;
+  const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
+  return polys.reduce((n, p) => n + p.reduce((m, r) => m + r.length, 0), 0);
+}
+// Straighten a feature until it has at most max corners, starting at 1 m and
+// growing 25 % a step. Holes are kept. Returns true if the shape changed.
+function capCorners(f, max) {
+  if (cornerCount(f) <= max) return false;
+  let tolM = 1;
+  while (tolM < 300) {
+    let s = null;
+    try { s = turf.simplify(f, { tolerance: tolM / 111320, highQuality: true }); } catch (e) { s = null; }
+    if (s && cornerCount(s) <= max) { f.geometry = s.geometry; return true; }
+    tolM *= 1.25;
+  }
+  return false;
+}
+
 function setEditMode(mode) {
   editMode = mode;
   $('#eb-add').classList.toggle('sel', mode === 'add');
@@ -2296,8 +2317,22 @@ function wireBoundaryEditing() {
     }
     // every zone you touched snaps to the collar shape rules (pad, straight
     // edges, no sharp corners, 30 points max). New panels inherit "touched".
+    // Recipe regions (maxCorners set) skip the collar rules: they fill pockets
+    // and drop holes, which undid shrinks and pulled the wide recipe pieces off
+    // their neighbours. There the painted shape is kept, holes and all, and is
+    // only straightened if it has more than maxCorners corners (Toby, 24 Nov 2026).
     let adjusted = 0;
-    for (const fid of Array.from(editTouchedIds)) {
+    const maxCorners = REGIONS[currentRegion] && REGIONS[currentRegion].maxCorners;
+    if (maxCorners) {
+      for (const fid of Array.from(editTouchedIds)) {
+        const f = d.exclusion.features.find(x => x.properties.id === fid);
+        if (!f) continue;
+        if (capCorners(f, maxCorners)) adjusted += 1;
+        f.properties.acres = Math.round(turf.area(f) / 4046.8564 * 10) / 10;
+        if (!f.properties.enforce) f.properties.enforce = 'ok';
+      }
+    }
+    for (const fid of maxCorners ? [] : Array.from(editTouchedIds)) {
       const f = d.exclusion.features.find(x => x.properties.id === fid);
       if (!f || f.properties.enforce === 'irrigated' || f.properties.enforce === 'too_small') continue;
       const res = snapFeatureToCollar(fid);
