@@ -16,19 +16,50 @@ const BASEMAP_STYLE = 'https://basemapstyles-api.arcgis.com/arcgis/rest/services
 const DATA_ROOT = 'data';
 const STUB_ROOT = 'stub-data';
 
-const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water', 'funding'];
+const LAYER_FILES = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water', 'funding', 'pastures'];
+
+// Taylor's main test area (Toby, 16 Nov 2026): where Red Canyon Creek meets
+// the Little Popo Agie, Orchard Draw on the west, Red Canyon Rim on the east.
+const TAYLOR_TEST_VIEW = { center: [-108.6749, 42.6787], zoom: 14.2 };
 
 const REGIONS = {
-  'red-canyon': { label: 'Red Canyon', center: [-108.65, 42.63], zoom: 12.4,
-                  detail: { center: [-108.628, 42.667], zoom: 15.4 } },
+  // Red Canyon, Zumwalt and Las Piletas: the ground-truth sites. Their keep-out zones come from
+  // the national recipe in stream mode, drawn as in the field-test app and cut into ~300 m
+  // pieces of at most 100 corners (06 gis data/proto_recipe_zones.py, 24 Nov 2026). The recipe
+  // covers only the ground-truth box, so Red Canyon's zones stop at the edge of the pastures.
+  'red-canyon': { label: 'Red Canyon', center: [-108.724, 42.621], zoom: 11.6,
+                  detail: { center: [-108.628, 42.667], zoom: 15.4 },
+                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
+  'zumwalt':    { label: 'Zumwalt Prairie', center: [-116.949, 45.581], zoom: 11.8,
+                  detail: { center: [-116.949, 45.581], zoom: 11.8 },
+                  files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
+  'las-piletas': { label: 'Las Piletas', center: [-120.097, 35.286], zoom: 12.2,
+                   detail: { center: [-120.097, 35.286], zoom: 12.2 },
+                   files: { exclusion: 'exclusion_recipe' }, dataVer: 'recipe-stream-1' },
   'bear-lake':  { label: 'Bear Lake',  center: [-111.302, 41.999], zoom: 12.2,
                   detail: { center: [-111.392, 42.124], zoom: 15.1 } },
   'holland':    { label: 'Big Hole (Holland)', center: [-113.03, 45.29], zoom: 11.6,
                   // opens on Reservoir Creek (Custodial + AMP), the allotment the demo uses
                   detail: { center: [-113.080, 45.158], zoom: 13.6 } },
   'martinell':  { label: 'Centennial (Martinell)', center: [-111.82, 44.71], zoom: 12.0,
-                  detail: { center: [-111.79, 44.72], zoom: 14.5 } }
+                  detail: { center: [-111.79, 44.72], zoom: 14.5 } },
+  // Red Canyon on the ranch's own pastures: one data set, three versions of
+  // the two-method rule, so the manager can say which is closest (Nov 2026)
+  'rc-taylor-a': { label: 'Red Canyon pastures: A (tight)', center: [-108.724, 42.621], zoom: 11.6,
+                   detail: TAYLOR_TEST_VIEW },
+  'rc-taylor-b': { label: 'Red Canyon pastures: B (middle)', center: [-108.724, 42.621], zoom: 11.6,
+                   detail: TAYLOR_TEST_VIEW },
+  'rc-taylor-c': { label: 'Red Canyon pastures: C (wide)', center: [-108.724, 42.621], zoom: 11.6,
+                   detail: TAYLOR_TEST_VIEW }
 };
+
+// Browser-storage key for one region. A region whose keep-out zones were swapped for new data
+// (dataVer) gets fresh keys, so edits, gaps, reviews and payments tied to the old zone ids
+// never land on the new shapes. The old saved data stays in the browser, untouched.
+function rkey(prefix, region) {
+  const v = REGIONS[region] && REGIONS[region].dataVer;
+  return prefix + region + (v ? '@' + v : '');
+}
 
 const GAP_HALF_M = 15; // half of the 30 m gap width, for point→square seals
 
@@ -50,7 +81,8 @@ async function fetchLayer(region, layer) {
   }
   for (const root of [DATA_ROOT, STUB_ROOT]) {
     try {
-      const res = await fetch(`${root}/${region}/${layer}.geojson`);
+      const file = (REGIONS[region] && REGIONS[region].files && REGIONS[region].files[layer]) || layer;
+      const res = await fetch(`${root}/${region}/${file}.geojson`);
       if (res.ok) {
         if (root === STUB_ROOT) usedStubData = true;
         return await res.json();
@@ -70,7 +102,7 @@ async function loadRegion(region) {
   out.water_gaps.features = out.water_gaps.features.filter(
     f => String(f.properties && f.properties.id).startsWith('user-'));
   try {
-    const saved = JSON.parse(localStorage.getItem('userGaps:' + region));
+    const saved = JSON.parse(localStorage.getItem(rkey('userGaps:', region)));
     if (saved && Array.isArray(saved.feats)) {
       out.water_gaps.features = saved.feats;
       gapOpenState[region] = saved.state || {};
@@ -80,7 +112,7 @@ async function loadRegion(region) {
   // rancher's saved seasonal boundary edits if any exist on this device.
   out.exclusionPristine = JSON.parse(JSON.stringify(out.exclusion));
   try {
-    let edit = JSON.parse(localStorage.getItem('riparianEdit:' + region));
+    let edit = JSON.parse(localStorage.getItem(rkey('riparianEdit:', region)));
     if (edit && Array.isArray(edit.features)) edit = migrateSnapshot(edit, out.exclusionPristine);
     if (edit && edit.changed) {
       out.exclusion = applyEditOverlay(out.exclusionPristine, edit);
@@ -223,6 +255,7 @@ function addSourcesAndLayers() {
 
   map.addSource('ownership', { type: 'geojson', data: d.ownership });
   map.addSource('allotments', { type: 'geojson', data: d.allotments });
+  map.addSource('pastures', { type: 'geojson', data: d.pastures });
   map.addSource('exclusion', { type: 'geojson', data: d.exclusion });
   map.addSource('gap-seals', { type: 'geojson', data: gaps.seals });
   map.addSource('gap-points', { type: 'geojson', data: gaps.points });
@@ -245,6 +278,27 @@ function addSourcesAndLayers() {
         ['in', 'state', ownerStr], 'rgba(66, 165, 245, 0.22)',
         ['in', 'ranch land', ownerStr], 'rgba(124, 179, 66, 0.25)',
         'rgba(0,0,0,0)']
+    }
+  });
+
+  // Ranch pastures (only regions that ship a pasture map): pale yellow
+  // fence lines + names, like the rancher's own map.
+  map.addLayer({
+    id: 'pastures-line', type: 'line', source: 'pastures',
+    paint: { 'line-color': '#ffe27a', 'line-width': 1.6, 'line-opacity': 0.95 }
+  });
+  map.addLayer({
+    id: 'pastures-label', type: 'symbol', source: 'pastures', minzoom: 11.5,
+    layout: {
+      'text-field': ['get', 'name'],
+      'text-font': firstSymbolFont(),
+      'text-size': 12,
+      'symbol-placement': 'point'
+    },
+    paint: {
+      'text-color': '#fff1b8',
+      'text-halo-color': 'rgba(0,0,0,0.85)',
+      'text-halo-width': 1.4
     }
   });
 
@@ -468,6 +522,7 @@ function refreshRegionSources() {
   const gaps = buildGapCollections(currentRegion);
   map.getSource('ownership').setData(d.ownership);
   map.getSource('allotments').setData(d.allotments);
+  map.getSource('pastures').setData(d.pastures);
   map.getSource('exclusion').setData(displayedExclusionFC(currentRegion));
   map.getSource('gap-seals').setData(gaps.seals);
   map.getSource('gap-points').setData(gaps.points);
@@ -541,6 +596,13 @@ function showExclusionCard(props) {
       'No collar system has ever held a boundary that tight, so it is not part of the keep-out area. ' +
       'If it matters (a seep, a spring), widen it: the whole widened circle becomes the keep-out.</p>' +
       '<div class="gap-toggle"><button id="ex-widen-btn" class="sel-open">Widen to protect this spot</button></div>';
+  } else if (props.enforce === 'irrigated' && props.ghost_note) {
+    // dotted zones that are not about irrigation (hay meadow named by the
+    // ranch, or a spot where the two mapping methods disagree)
+    narrowNote =
+      '<p class="card-sub" style="color:#bfe0ff"><b>' + esc(props.ghost_title || 'Your call') + '</b>: ' +
+      esc(props.ghost_note) + '</p>' +
+      '<div class="gap-toggle"><button id="ex-promote-btn" class="sel-open">Add to exclusion</button></div>';
   } else if (props.enforce === 'irrigated') {
     narrowNote =
       '<p class="card-sub" style="color:#bfe0ff"><b>Watered ground</b>: this land is green because it gets ' +
@@ -550,8 +612,8 @@ function showExclusionCard(props) {
       '<div class="gap-toggle"><button id="ex-promote-btn" class="sel-open">Add to exclusion</button></div>';
   } else if (props.enforce === 'included') {
     narrowNote =
-      '<p class="card-sub" style="color:#9fe3b9"><b>Added by you</b>: watered ground you chose to include ' +
-      'in the keep-out area.</p>' +
+      '<p class="card-sub" style="color:#9fe3b9"><b>Added by you</b>: ' +
+      (props.ghost_kind ? 'ground' : 'watered ground') + ' you chose to include in the keep-out area.</p>' +
       '<div class="gap-toggle"><button id="ex-demote-btn">Remove again</button></div>';
   } else if (props.enforce === 'widened') {
     narrowNote =
@@ -747,7 +809,7 @@ function showSeasonCard() {
     const dd = regionData[currentRegion];
     dd.exclusion.features = JSON.parse(JSON.stringify(dd.exclusionPristine.features));
     dd.editSavedAt = null;
-    try { localStorage.removeItem('riparianEdit:' + currentRegion); } catch (e) {}
+    try { localStorage.removeItem(rkey('riparianEdit:', currentRegion)); } catch (e) {}
     refreshGapSources();
     updateSeasonChip();
     showHintCard();
@@ -760,7 +822,7 @@ function showSeasonCard() {
 // or keep?). Big healthy zones need no decision, so they are not in the tour.
 // Each decision is remembered per device.
 function reviewedIds(region) {
-  try { return new Set(JSON.parse(localStorage.getItem('reviewed:' + region)) || []); }
+  try { return new Set(JSON.parse(localStorage.getItem(rkey('reviewed:', region))) || []); }
   catch (e) { return new Set(); }
 }
 
@@ -770,14 +832,17 @@ function buildReviewList(region) {
   const done = reviewedIds(region);
   const feats = d.exclusion.features.filter(f => !done.has(f.properties.id));
   const byAcres = (a, b) => (b.properties.acres || 0) - (a.properties.acres || 0);
-  const pick = (flag, n, reason) =>
-    feats.filter(f => f.properties.enforce === flag).sort(byAcres).slice(0, n)
-      .map(f => ({ f, reason }));
+  const pick = (flag, n, reason, kind) =>
+    feats.filter(f => f.properties.enforce === flag && (f.properties.ghost_kind || '') === (kind || ''))
+      .sort(byAcres).slice(0, n)
+      .map(f => ({ f, reason: f.properties.ghost_note ? f.properties.ghost_note + ' Add it to the keep-out area, or leave it out.' : reason }));
   return [
+    ...pick('irrigated', 5, '', 'check'),
+    ...pick('irrigated', 3, '', 'meadow'),
     ...pick('irrigated', 4, 'Watered ground, green because it gets irrigated. It is left out unless you add it. Add it to the keep-out area, or leave it out.'),
     ...pick('too_small', 4, 'A small wet spot, under 10 m wide. Collars cannot hold it as is. Widen it to protect it, or leave it out.'),
     ...pick('narrow', 2, 'A narrow piece of the keep-out area, under 25 m wide. Collars may not hold a line this tight. Widen it, or keep it as is.')
-  ].slice(0, 10);
+  ].slice(0, 12);
 }
 
 let reviewList = [], reviewIdx = 0;
@@ -841,7 +906,7 @@ function goReviewItem() {
     try {
       const done = reviewedIds(currentRegion);
       done.add(p.id);
-      localStorage.setItem('reviewed:' + currentRegion, JSON.stringify([...done]));
+      localStorage.setItem(rkey('reviewed:', currentRegion), JSON.stringify([...done]));
     } catch (e) {}
   };
   const advance = () => { reviewIdx += 1; goReviewItem(); };
@@ -1260,7 +1325,7 @@ function openNrcsSheet(fid) {
    it, and applies to that zone's reach. Accepting happens in My areas. The
    payment ends the moment the reach stops being established: grazing days
    opened, un-marked, or the boundary changed. Money never changes the map. */
-const PAY_KEY = (r) => 'deferPay:' + r;
+const PAY_KEY = (r) => rkey('deferPay:', r);
 let payState = {};
 function loadPayState(region) {
   if (payState[region]) return payState[region];
@@ -1540,8 +1605,8 @@ function persistSeasonEdit(region) {
   const edit = editOverlay(region);
   const any = Object.keys(edit.changed).length || edit.removed.length;
   try {
-    if (any) localStorage.setItem('riparianEdit:' + region, JSON.stringify(edit));
-    else localStorage.removeItem('riparianEdit:' + region);
+    if (any) localStorage.setItem(rkey('riparianEdit:', region), JSON.stringify(edit));
+    else localStorage.removeItem(rkey('riparianEdit:', region));
     regionData[region].editSavedAt = any ? edit.savedAt : null;
   } catch (e) { /* storage unavailable — change is session-only */ }
   updateSeasonChip();
@@ -1652,7 +1717,7 @@ function showGapCard(props) {
 
 function saveUserGaps(region) {
   try {
-    localStorage.setItem('userGaps:' + region, JSON.stringify({
+    localStorage.setItem(rkey('userGaps:', region), JSON.stringify({
       feats: regionData[region].water_gaps.features,
       state: gapOpenState[region]
     }));
@@ -2358,6 +2423,7 @@ const LAYER_GROUPS = {
   exclusion: ['exclusion-fill', 'exclusion-line', 'exclusion-line-narrow', 'exclusion-line-toosmall', 'exclusion-line-established', 'exclusion-graze-line'],
   water_gaps: ['gap-fill', 'gap-line-open', 'gap-line-closed', 'gap-icons', 'gap-name-label'],
   allotments: ['allotments-line', 'allotments-label'],
+  pastures: ['pastures-line', 'pastures-label'],
   ownership: ['ownership-fill', 'ownership-source-label'],
   springs: ['springs-dot', 'springs-source-label']
 };

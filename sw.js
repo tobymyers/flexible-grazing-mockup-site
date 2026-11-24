@@ -5,10 +5,10 @@
  */
 'use strict';
 
-const VERSION = 'rip-mockup-v56';
+const VERSION = 'rip-mockup-v59';
 // Bump ?v= in index.html together with VERSION: GitHub Pages caches every
 // file for 10 minutes, so a new page must ask for its own code by a new URL.
-const V = '56';
+const V = '59';
 const SHELL_CACHE = VERSION + '-shell';
 const TILE_CACHE = VERSION + '-tiles';
 
@@ -21,8 +21,8 @@ const SHELL = [
   'manifest.webmanifest'
 ];
 
-const REGIONS = ['red-canyon', 'bear-lake', 'holland', 'martinell'];
-const LAYERS = ['exclusion', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water', 'funding'];
+const REGIONS = ['red-canyon', 'zumwalt', 'las-piletas', 'bear-lake', 'holland', 'martinell', 'rc-taylor-a', 'rc-taylor-b', 'rc-taylor-c'];
+const LAYERS = ['exclusion', 'exclusion_recipe', 'water_gaps', 'paddock', 'allotments', 'ownership', 'springs', 'roads', 'water', 'funding', 'pastures'];
 const DATA_URLS = [];
 for (const root of ['data', 'stub-data']) {
   for (const r of REGIONS) {

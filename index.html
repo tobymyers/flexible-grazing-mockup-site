@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2314150f'/%3E%3Cpath d='M32 12c8 10 14 17 14 25a14 14 0 1 1-28 0c0-8 6-15 14-25z' fill='%234da3ff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.css">
-<link rel="stylesheet" href="style.css?v=56">
+<link rel="stylesheet" href="style.css?v=59">
 </head>
 <body>
 
@@ -38,6 +38,8 @@
 </div>
 <div id="region-menu" class="sheet mini" hidden>
   <button class="menu-item" data-region="red-canyon">Red Canyon <small>Lander, Wyoming</small></button>
+  <button class="menu-item" data-region="zumwalt">Zumwalt Prairie <small>Wallowa County, Oregon</small></button>
+  <button class="menu-item" data-region="las-piletas">Las Piletas <small>San Luis Obispo County, California</small></button>
   <button class="menu-item" data-region="bear-lake">Bear Lake <small>Utah / Idaho line</small></button>
   <button class="menu-item" data-region="holland">Big Hole (Holland) <small>Grasshopper Valley, Montana</small></button>
   <button class="menu-item" data-region="martinell">Centennial (Martinell) <small>Red Rock Creek, Montana</small></button>
@@ -204,6 +206,7 @@
   <label class="switch-row"><span>Exclusion zones</span><input type="checkbox" data-layer="exclusion" checked></label>
   <label class="switch-row"><span>Water gaps <small>drink spots</small></span><input type="checkbox" data-layer="water_gaps" checked></label>
   <label class="switch-row"><span>Allotments <small>BLM grazing areas</small></span><input type="checkbox" data-layer="allotments" checked></label>
+  <label class="switch-row"><span>Pastures <small>the ranch's own map</small></span><input type="checkbox" data-layer="pastures" checked></label>
   <label class="switch-row"><span>Who owns the land</span><input type="checkbox" data-layer="ownership"></label>
   <label class="switch-row"><span>Springs</span><input type="checkbox" data-layer="springs" checked></label>
   <p class="sheet-note"><span class="legend-open"></span> Dashed gold edge: grazing allowed right now.</p>
@@ -234,6 +237,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.24.0/maplibre-gl.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/7.2.0/turf.min.js"></script>
 <script src="config.js"></script>
-<script src="app.js?v=56"></script>
+<script src="app.js?v=59"></script>
 </body>
 </html>
